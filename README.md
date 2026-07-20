@@ -1,6 +1,6 @@
-# ProofMode
+# e2e
 
-ProofMode turns an agent's successful browser verification into a reviewable proof: a constrained, readable Playwright test replayed in a fresh browser, with a verdict and its visual evidence. The Build Week golden path is deliberately narrow: an agent adds the Vintage Camera low-stock warning, then ProofMode proves it locally and exposes deployment drift against an older target.
+e2e turns an agent's successful browser verification into a reviewable proof: a constrained, readable Playwright test replayed in a fresh browser, with a verdict and its visual evidence. The Build Week golden path is deliberately narrow: an agent adds the Vintage Camera low-stock warning, then e2e proves it locally and exposes deployment drift against an older target.
 
 ## Implementation status
 
@@ -70,7 +70,7 @@ Exports go to `proof-exports/` with a small sidecar that records the source proo
 
 ## Optional GPT-5.6 configuration
 
-The demo remains deterministic and offline-rehearsable. For live session interpretation, configure the server-side OpenAI integration with `OPENAI_API_KEY`; never expose this key in the browser or commit it. If no model call succeeds, ProofMode validates and uses its deterministic fallback rather than inventing a test.
+The demo remains deterministic and offline-rehearsable. For live session interpretation, configure the server-side OpenAI integration with `OPENAI_API_KEY`; never expose this key in the browser or commit it. If no model call succeeds, e2e validates and uses its deterministic fallback rather than inventing a test.
 
 ## Three-minute demo script
 
@@ -78,7 +78,7 @@ The demo remains deterministic and offline-rehearsable. For live session interpr
 2. Show Codex’s terminal/browser development evidence and the resulting `Only 3 left` warning.
 3. Open `/proof`: the reviewer sees the generated Playwright test, implementation diff, and fresh local `PASS` with video.
 4. Switch to `?target=production`. The byte-identical test runs against the older target and fails at the missing low-stock assertion; play the captured failure video.
-5. Close: “An agent’s claim is not proof. ProofMode independently replays the claim.”
+5. Close: “An agent’s claim is not proof. e2e independently replays the claim.”
 
 For a rehearsal, run the reliability command before recording and use its timestamped artifacts as backup evidence.
 ## Local proof-run API

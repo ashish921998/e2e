@@ -1,12 +1,12 @@
-# ProofMode
+# e2e
 
-ProofMode is a local-first proof runner for coding-agent work. It records a successful browser verification as structured evidence, compiles that evidence into a constrained Playwright test, replays the test in a fresh browser, and presents the resulting artifacts as a reviewable Proof Bundle.
+e2e is a local-first proof runner for coding-agent work. It records a successful browser verification as structured evidence, compiles that evidence into a constrained Playwright test, replays the test in a fresh browser, and presents the resulting artifacts as a reviewable Proof Bundle.
 
 The Build Week implementation demonstrates one deterministic behavior: a Vintage Camera product with three remaining units must display `Only 3 left`. The same generated proof passes against the updated local target and fails against a controlled older target that omits the warning.
 
 ## Language
 
-**ProofMode**:
+**e2e**:
 A local-first product that turns a coding agent's browser verification into independently replayed evidence.
 _Avoid_: Agent dashboard, autonomous QA platform
 

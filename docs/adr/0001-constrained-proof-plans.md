@@ -6,7 +6,7 @@ Accepted.
 
 ## Context
 
-ProofMode uses a model to interpret a Recorded Session, but an agent's explanation or arbitrary generated JavaScript cannot be treated as executable proof. The generated behavior must be understandable, reviewable, and safe to run locally.
+e2e uses a model to interpret a Recorded Session, but an agent's explanation or arbitrary generated JavaScript cannot be treated as executable proof. The generated behavior must be understandable, reviewable, and safe to run locally.
 
 ## Decision
 
