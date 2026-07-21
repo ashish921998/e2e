@@ -1,0 +1,53 @@
+name: proof
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+
+      # Replays the proof in a fresh browser; video:"on" saves a .webm per test.
+      - run: npm run test:e2e
+
+      # Always upload evidence, even on failure — a failing proof is still reviewable.
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proof-video
+          path: |
+            test-results/**/video.webm
+            playwright-report/
+
+      # GitHub renders uploaded video inline in PR comments.
+      - if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          run="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          {
+            echo "### Proof replay"
+            echo ""
+            if [ "${{ job.status }}" = "success" ]; then echo "✅ Proof passed."; else echo "❌ Proof failed."; fi
+            echo ""
+            if find test-results -name video.webm | grep -q .; then
+              echo "📹 [Download proof video]($run) — open the run and grab the \`proof-video\` artifact."
+            else
+              echo "⚠️ No proof video was produced."
+            fi
+          } > body.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file body.md
