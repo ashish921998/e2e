@@ -1,11 +1,32 @@
 name: proof
 
+# Reference workflow — this repo's own PRs are the live demo, and this file is
+# copy-paste documentation for adopting e2e-proof in any web repo.
+#
+# Two install modes are shown:
+#   (A) deployment_status — the default, drop-in path for Vercel/Netlify/etc.
+#       It fires when the PR's preview finishes deploying and reads that URL
+#       from the event. Uncomment the trigger below to use it.
+#   (B) pull_request — used here so the demo runs against a preview booted
+#       in-CI (`npm run dev:local`) without an external deploy host.
+#
+# Install in your repo:
+#   1. Add this file as .github/workflows/e2e-proof.yml
+#   2. Add secrets E2B_API_KEY + (ANTHROPIC_API_KEY | OPENAI_API_KEY)
+#   3. Reference the published action: uses: ashish921998/e2e-proof@v1
+
 on:
   pull_request:
+  # deployment_status:   # ← uncomment for the zero-config preview path (A)
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "URL to test (manual demo run)"
+        required: true
 
 permissions:
-  contents: write        # push the mp4 to the proof-videos branch
-  pull-requests: write
+  contents: write        # upload the video Release asset
+  pull-requests: write   # post the verdict comment
 
 jobs:
   proof:
@@ -13,64 +34,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium
-
-      # Replays the proof in a fresh browser; video:"on" saves a .webm per test.
-      - run: npm run test:e2e
-
-      # Always upload evidence, even on failure — a failing proof is still reviewable.
-      - if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: proof-video
-          path: |
-            test-results/**/video.webm
-            playwright-report/
-
-      # Publish an inline-playable video: convert webm -> mp4 and upload it as a
-      # Release asset (a GitHub-hosted URL, the best shot at inline <video>).
-      - if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Demo mode only: boot this repo's app in-CI so the action has a target.
+      # Adopters with a preview host delete this and trigger on deployment_status.
+      - name: Boot the demo app (CI preview)
+        id: app
+        shell: bash
         run: |
-          set -e
-          pr="${{ github.event.pull_request.number }}"
-          run="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          status=${{ job.status == 'success' && '"✅ Proof passed."' || '"❌ Proof failed."' }}
+          npm ci
+          npx playwright install --with-deps chromium
+          ( npm run dev:local -- --port 4173 --host 127.0.0.1 >/tmp/app.log 2>&1 & )
+          for i in $(seq 1 120); do
+            curl -sf http://127.0.0.1:4173 >/dev/null && break || sleep 1
+          done
+          echo "url=http://127.0.0.1:4173" >> "$GITHUB_OUTPUT"
 
-          webm=$(find test-results -name video.webm | head -n1 || true)
-          dl=""
-          if [ -n "$webm" ]; then
-            sudo apt-get -qq update && sudo apt-get -qq install -y ffmpeg
-            ffmpeg -y -i "$webm" -movflags +faststart -pix_fmt yuv420p proof.mp4
-
-            tag="proof-videos"
-            asset="pr-${pr}-run-${{ github.run_id }}.mp4"
-            mv proof.mp4 "$asset"
-            gh release view "$tag" >/dev/null 2>&1 \
-              || gh release create "$tag" --title "Proof videos" --notes "Automated proof replay videos." --prerelease
-            gh release upload "$tag" "$asset" --clobber
-            dl="${{ github.server_url }}/${{ github.repository }}/releases/download/${tag}/${asset}"
-          fi
-
-          {
-            echo "### Proof replay"
-            echo ""
-            echo "$status"
-            echo ""
-            if [ -n "$dl" ]; then
-              # Bare release-asset URL — GitHub auto-embeds a player for hosted video.
-              echo "$dl"
-              echo ""
-              echo "_Not playing inline? [Download the video]($dl) or [open the run]($run)._"
-            else
-              echo "⚠️ No proof video was produced. [See the run]($run)."
-            fi
-          } > body.md
-          gh pr comment "$pr" --body-file body.md
+      # The reusable action does: resolve URL → E2B sandbox + agent → replay →
+      # upload artifacts → post verdict + video. `base-url` is explicit here
+      # (CI preview); omit it to auto-detect from a deployment_status event.
+      - name: Run e2e-proof
+        uses: ./
+        with:
+          base-url: ${{ github.event.inputs.url || steps.app.outputs.url }}
+          goal: "Verify the Vintage Camera product page shows the low-stock warning."
+        env:
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}   # alternative model

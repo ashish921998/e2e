@@ -3,6 +3,7 @@ dist/
 playwright-report/
 test-results/
 proof-runs/
+proof-out/
 proof-exports/
 *.tsbuildinfo
 .env

@@ -1,8 +1,11 @@
 {
   "name": "e2e",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.2.0",
   "type": "module",
+  "bin": {
+    "e2e-prove": "bin/e2e-prove.mjs"
+  },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "dev:local": "vite --host 127.0.0.1 --mode updated",
@@ -13,19 +16,25 @@
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:report": "playwright show-report",
     "proof:rehearse": "node scripts/reliability.mjs",
-    "proof:export": "node scripts/export-proof.mjs"
+    "proof:export": "node scripts/export-proof.mjs",
+    "prove": "node bin/e2e-prove.mjs",
+    "typecheck": "tsc -b"
   },
   "dependencies": {
+    "@e2b/desktop": "^2.3.1",
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
+    "e2b": "^2.35.0",
+    "playwright-core": "^1.61.1",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "vite": "latest"
   },
   "devDependencies": {
     "@playwright/test": "latest",
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "tsx": "^4.23.1",
     "typescript": "latest"
   }
 }

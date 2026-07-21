@@ -2,6 +2,65 @@
 
 e2e turns an agent's successful browser verification into a reviewable proof: a constrained, readable Playwright test replayed in a fresh browser, with a verdict and its visual evidence. The Build Week golden path is deliberately narrow: an agent adds the Vintage Camera low-stock warning, then e2e proves it locally and exposes deployment drift against an older target.
 
+## e2e-proof — agentic web testing on E2B (GitHub Action + CLI)
+
+On top of the local engine, **e2e-proof** gives any web repo an autonomous tester that runs on every PR: it boots an isolated cloud sandbox (E2B — real Chrome + a terminal), an LLM agent (Claude Opus 4.8 or GPT-5.6) drives the browser to verify your change, then the same deterministic engine replays the recorded steps in a fresh browser to produce the verdict. Both the agent-exploration video and the replay video are posted to the PR. **An agent's claim is not the proof — the independent replay is.**
+
+### Install in any repo (one file + two secrets)
+
+```yaml
+# .github/workflows/e2e-proof.yml
+on:
+  deployment_status:          # fires when your preview finishes deploying
+jobs:
+  proof:
+    if: github.event.deployment_status.state == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ashish921998/e2e-proof@v1
+        with:
+          goal: "verify the changed feature works"
+        env:
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # or OPENAI_API_KEY
+```
+
+Add repo secrets `E2B_API_KEY` + one of `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`. That's the whole install — no code copied, no engine to wire. The action auto-resolves the PR's preview URL from the `deployment_status` event (works with Vercel, Netlify, Cloudflare Pages, Render, Amplify); pass `base-url` to override, or trigger on `pull_request` with an explicit URL.
+
+### Run locally or in any CI
+
+```sh
+npx e2e-prove --url https://your-preview.app --goal "the cart total updates on add"
+# → proof-out/agent-exploration.mp4, proof-out/replay/bundle.json, exit 0 on pass
+```
+
+Exit code is the verdict, so CI gates on it. `--diff <file>` grounds the agent on the PR change; `--no-replay` runs exploration only.
+
+### Supported platforms
+
+- **CI:** GitHub Actions (`ubuntu-latest`); portable to any CI via the `npx` CLI.
+- **Sandbox/runtime:** E2B cloud Linux VM (Ubuntu) — Chrome + terminal + recording provided by E2B; nothing installed on the runner.
+- **CLI host:** Node 20+ on macOS / Linux / Windows (WSL).
+- **Target:** any web app reachable by URL (React/Vue/static/SSR — the agent drives real Chrome; framework-agnostic).
+- **Models:** Claude Opus 4.8 (Anthropic) or GPT-5.6 (OpenAI) — chosen by which key is present.
+
+### How it works (the determinism guarantee)
+
+1. The agent calls a **constrained tool set** — `goto`, `click(role,name)`, `fill(role,name,value)`, `observe_role/observe_text`, `bash`, `finish` — driven over a CDP URL into the sandboxed Chrome.
+2. Every browser tool **also** appends a `RecordedBrowserEvent` to a `RecordedSession` (the engine's existing shape in `src/proof/types.ts`).
+3. When the agent finishes, `deterministicPlanFromSession` turns the session into a `ProofPlan`, which `renderPlaywrightTest` renders to a real Playwright spec.
+4. `runProof` replays that spec once in a **fresh** browser with `video:"on"`. Only that independent replay's assertions can produce a `passed` verdict.
+5. The agent-exploration video (assembled from per-step screenshots) is the journey; the replay video is the proof.
+
+```
+PR → action → startSandbox(E2B) → agent loop (model + tools) → RecordedSession
+            → deterministicPlanFromSession → runProof (fresh Playwright, video:on) → verdict + videos → PR comment
+```
+
+### Why E2B
+
+E2B is the "give the agent a computer" layer: an isolated cloud VM with Chrome, a terminal, and a live stream, with nothing to install on the runner. It removes all the sandbox-a-browser-and-terminal-in-CI work. The agent attaches Playwright over the CDP URL E2B exposes, so `getByRole(...)` (robust to CSS/class changes) drives the page — which is what maps 1:1 to a `ProofStep` and keeps the proof deterministic.
+
 ## Implementation status
 
 The local golden path is implemented and validated. A user can capture a browser session, run a fresh local replay through the Vite runtime, inspect the generated test and video in the reviewer, rehearse local-pass/older-target-failure behavior, and export a verified rehearsal test. GPT-5.6 interpretation is optional because the runner must remain deterministic when `OPENAI_API_KEY` is unavailable.
