@@ -35,7 +35,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Demo mode only: boot this repo's app in-CI so the action has a target.
+      # Demo mode only: boot this repo's app in CI and give the remote E2B
+      # browser a public URL. Runner localhost is not visible inside E2B.
       # Adopters with a preview host delete this and trigger on deployment_status.
       - name: Boot the demo app (CI preview)
         id: app
@@ -43,11 +44,31 @@ jobs:
         run: |
           npm ci
           npx playwright install --with-deps chromium
-          ( npm run dev:local -- --port 4173 --host 127.0.0.1 >/tmp/app.log 2>&1 & )
+          ( __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=.trycloudflare.com \
+            npm run dev:local -- --port 4173 --host 127.0.0.1 >/tmp/app.log 2>&1 & )
           for i in $(seq 1 120); do
             curl -sf http://127.0.0.1:4173 >/dev/null && break || sleep 1
           done
-          echo "url=http://127.0.0.1:4173" >> "$GITHUB_OUTPUT"
+
+          curl -fsSL \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+            -o "$RUNNER_TEMP/cloudflared"
+          chmod +x "$RUNNER_TEMP/cloudflared"
+          "$RUNNER_TEMP/cloudflared" tunnel --no-autoupdate \
+            --url http://127.0.0.1:4173 > /tmp/cloudflared.log 2>&1 &
+
+          url=""
+          for i in $(seq 1 60); do
+            url=$(grep -oE 'https://[-a-z0-9]+\.trycloudflare\.com' /tmp/cloudflared.log | head -n1 || true)
+            [ -n "$url" ] && curl -sf "$url" >/dev/null && break
+            sleep 1
+          done
+          if [ -z "$url" ]; then
+            cat /tmp/cloudflared.log
+            echo "::error::Cloudflare quick tunnel did not become ready"
+            exit 1
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
 
       # The reusable action does: resolve URL → E2B sandbox + agent → replay →
       # upload artifacts → post verdict + video. `base-url` is explicit here

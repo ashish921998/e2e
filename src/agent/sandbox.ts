@@ -71,6 +71,10 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
   const template = options.template ?? process.env.E2B_TEMPLATE ?? DEFAULT_TEMPLATE;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const debugPort = options.debugPort ?? CHROME_DEBUG_PORT;
+  // Current Chrome builds bind the DevTools endpoint to loopback even when
+  // --remote-debugging-address=0.0.0.0 is supplied. E2B's port gateway cannot
+  // reach that socket directly, so expose it through a small TCP relay.
+  const forwardedDebugPort = debugPort + 1;
 
   // Lazy-load the heavy SDKs so importing this module (and the CLI's --help)
   // never pays for them or risks a loader stall.
@@ -102,6 +106,7 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
 
   // Keep a reference to the background Chrome handle so the SDK doesn't reap it.
   let chromeHandle: { kill: () => Promise<boolean> } | undefined;
+  let cdpRelayHandle: { kill: () => Promise<boolean> } | undefined;
   const chromeLog = "/tmp/chrome-cdp.log";
 
   async function ensureChrome(): Promise<void> {
@@ -177,6 +182,23 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
     } catch (error) {
       throw new Error(`Failed to start Chrome (${bin}) in the sandbox: ${safeMessage(error)}`);
     }
+
+    // E2B's gateway connects to the sandbox network interface, while Chrome's
+    // log confirms DevTools listens on 127.0.0.1. Relay a separate externally
+    // reachable port instead of relying on Chrome's ignored address flag.
+    try {
+      await sandbox.commands.run(
+        "command -v socat >/dev/null || (sudo apt-get -qq update && sudo apt-get -qq install -y socat)",
+        { timeoutMs: 60_000 },
+      );
+      const relay = await sandbox.commands.run(
+        `exec socat TCP-LISTEN:${forwardedDebugPort},bind=0.0.0.0,reuseaddr,fork TCP:127.0.0.1:${debugPort}`,
+        { background: true } as Record<string, unknown>,
+      );
+      cdpRelayHandle = relay as unknown as { kill: () => Promise<boolean> };
+    } catch (error) {
+      throw new Error(`Failed to expose Chrome CDP in the sandbox: ${safeMessage(error)}`);
+    }
   }
 
   /**
@@ -226,7 +248,7 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
     async connectPage() {
       if (!cached) {
         await ensureChrome();
-        const host = sandbox.getHost(debugPort);
+        const host = sandbox.getHost(forwardedDebugPort);
         // E2B forwards sandbox ports over TLS in production (getHost returns a
         // bare host like "<port>-<id>.e2b.dev", served at https://). Chrome's
         // CDP /json/version endpoint and the WebSocket upgrade are reachable
@@ -274,6 +296,11 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
     getHost: (port) => sandbox.getHost(port),
     streamUrl: () => sandbox.stream.getUrl(),
     async close() {
+      try {
+        await cdpRelayHandle?.kill();
+      } catch {
+        // The relay may already be gone with the sandbox.
+      }
       try {
         await chromeHandle?.kill();
       } catch {
