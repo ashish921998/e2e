@@ -1,0 +1,21 @@
+bin/e2e-prove.ts
+  s_dfffd262ae2905::t_b9de6e3ce232aa 67-70,104-140,143-145,147
+src/agent/sandbox.ts
+  s_dfffd262ae2905::t_f2eaf6739196da 170-176
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "2a993aefc2eb3445e647e600a2e23d5935a311e1",
+  "prompts": {},
+  "sessions": {
+    "s_dfffd262ae2905": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f85c6-0620-70c3-b8df-a57e1babe9f8",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Ashish Huddar <ashish.hudar@gmail.com>"
+    }
+  }
+}
