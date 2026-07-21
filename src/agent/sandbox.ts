@@ -100,47 +100,99 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
     // The stream is a debugging convenience; its absence is non-fatal.
   }
 
-  let chromeLaunched = false;
+  // Keep a reference to the background Chrome handle so the SDK doesn't reap it.
+  let chromeHandle: { kill: () => Promise<boolean> } | undefined;
+  const chromeLog = "/tmp/chrome-cdp.log";
 
   async function ensureChrome(): Promise<void> {
-    if (chromeLaunched) return;
-    // Launch headless Chrome with a remote debugging port bound to all
-    // interfaces so the host-forwarded port is reachable via getHost. We try
-    // the common binary names; the Desktop template ships Google Chrome.
+    if (chromeHandle) return;
+    // Resolve the binary first. The E2B SDK's `commands.run(background:true)`
+    // returns a handle immediately WITHOUT throwing if the binary is missing or
+    // exits on startup — the failure only surfaces if you `.wait()` the handle,
+    // which means a silent 9222 and a bare "CDP HTTP 502" 30s later. So we
+    // detect the real path up front (blocking `command -v`, which *does* throw
+    // on a missing binary) and then launch it in the background.
     const candidates = [
       "google-chrome",
       "google-chrome-stable",
       "chromium",
       "chromium-browser",
     ];
+    let bin: string | undefined;
+    let detectError = "";
+    for (const candidate of candidates) {
+      try {
+        // `command -v` exits non-zero when the binary is absent; commands.run
+        // (blocking) throws CommandExitError on that, so this is the real gate.
+        const result = await sandbox.commands.run(`command -v ${candidate}`, { timeoutMs: 5_000 });
+        if (result.exitCode === 0) {
+          bin = (result.stdout || candidate).trim().split("\n")[0]!.trim() || candidate;
+          break;
+        }
+        detectError = `${candidate}: exit ${result.exitCode}`;
+      } catch (error) {
+        detectError = `${candidate}: ${safeMessage(error)}`;
+      }
+    }
+    if (!bin) {
+      throw new Error(
+        `No Chrome/Chromium binary found in the E2B sandbox (tried ${candidates.join(", ")}; last: ${detectError}). ` +
+          `Use a template that ships Chrome (e.g. the default "desktop") or set E2B_TEMPLATE.`,
+      );
+    }
+
+    // Launch headless Chrome with a remote debugging port bound to all
+    // interfaces so the host-forwarded port is reachable via getHost. We write
+    // stdout/stderr to a log file so a CDP timeout can report the real reason
+    // instead of a bare HTTP status. `about:blank` must be a positional URL,
+    // never `--about:blank` (an unknown flag that can make Chrome exit at once).
     const args = [
-      "--headless=new",
+      `--headless=new`,
       "--no-sandbox",
       "--disable-gpu",
       "--disable-dev-shm-usage",
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--user-data-dir=/tmp/chrome-cdp-profile",
       `--remote-debugging-port=${debugPort}`,
       "--remote-debugging-address=0.0.0.0",
-      "--about:blank",
+      "about:blank",
     ];
-    let lastError: unknown;
-    for (const bin of candidates) {
-      try {
-        // Run in the background: Chrome stays up for the session.
-        await sandbox.commands.run(`${bin} ${args.join(" ")}`, {
-          background: true,
-          timeoutMs: 10_000,
-        } as Record<string, unknown>);
-        chromeLaunched = true;
-        return;
-      } catch (error) {
-        lastError = error;
-      }
+    // Run via the SDK's background mode (the documented way to keep a long-lived
+    // server process alive for the session) and tee Chrome's output to a log so
+    // a CDP timeout can show why. We keep the CommandHandle so Chrome isn't
+    // reaped and so close() can kill it.
+    const launch = `exec ${bin} ${args.join(" ")} > ${chromeLog} 2>&1`;
+    try {
+      const handle = await sandbox.commands.run(launch, {
+        background: true,
+        timeoutMs: 10_000,
+      } as Record<string, unknown>);
+      chromeHandle = handle as unknown as { kill: () => Promise<boolean> };
+    } catch (error) {
+      throw new Error(`Failed to start Chrome (${bin}) in the sandbox: ${safeMessage(error)}`);
     }
-    throw new Error(
-      `Could not launch Chrome in the sandbox (tried ${candidates.join(", ")}). ` +
-        `Install Chrome in your E2B template or set E2B_TEMPLATE to one that has it. ` +
-        safeMessage(lastError),
-    );
+  }
+
+  /**
+   * If Chrome's CDP endpoint isn't up, dump the diagnostics we can gather from
+   * the sandbox (is the process alive? is the port listening? what did Chrome
+   * print?) so the thrown error points at the real cause instead of "HTTP 502".
+   */
+  async function diagnoseCdpFailure(url: string, lastError: string): Promise<string> {
+    const parts = [`Chrome CDP did not become ready at ${url}: ${lastError}`];
+    try {
+      const ps = await sandbox.commands.run(
+        `echo "[ps chrome]"; ps aux | grep -iE 'chrome|chromium' | grep -v grep || echo "(no chrome process)"; ` +
+          `echo "[port 9222]"; (ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null) | grep 9222 || echo "(nothing listening on 9222)"; ` +
+          `echo "[chrome.log]"; tail -n 20 ${chromeLog} 2>/dev/null || echo "(no chrome log)"`,
+        { timeoutMs: 10_000 },
+      );
+      parts.push(`\n--- sandbox diagnostics ---\n${(ps.stdout || "")+(ps.stderr || "")}`.trimEnd());
+    } catch (error) {
+      parts.push(`(diagnostics unavailable: ${safeMessage(error)})`);
+    }
+    return parts.join("\n");
   }
 
   async function waitForCdp(url: string, timeoutMs = 30_000): Promise<void> {
@@ -156,7 +208,7 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
       }
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
-    throw new Error(`Chrome CDP did not become ready at ${url}: ${lastError}`);
+    throw new Error(await diagnoseCdpFailure(url, lastError));
   }
 
   let cached: { browser: Browser; context: BrowserContext } | undefined;
@@ -214,6 +266,11 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
     getHost: (port) => sandbox.getHost(port),
     streamUrl: () => sandbox.stream.getUrl(),
     async close() {
+      try {
+        await chromeHandle?.kill();
+      } catch {
+        // Chrome may already be gone with the sandbox.
+      }
       try {
         await cached?.browser.close();
       } catch {
