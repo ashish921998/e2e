@@ -110,7 +110,9 @@ runs:
         # The Action's code lives in $GITHUB_ACTION_PATH (bin/, src/, package.json,
         # package-lock.json) — checked out by GitHub. Installing its deps here means
         # the consuming repo needs nothing but the workflow file + secrets.
-        npm ci
+        # --omit=dev skips the demo app's toolchain (react/vite/typescript);
+        # the CLI itself only needs the runtime deps.
+        npm ci --omit=dev
         # The deterministic replay runs Playwright on the runner, so it needs the
         # Chromium binary + OS deps here. E2B provides the *agent's* browser; the
         # *replay's* browser is this one.

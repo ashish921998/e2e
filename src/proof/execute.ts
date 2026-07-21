@@ -9,7 +9,8 @@
  */
 import { spawn } from "node:child_process";
 import { mkdir, writeFile, readdir } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { createRequire } from "node:module";
+import { delimiter, dirname, join, relative } from "node:path";
 import {
   createProofBundle,
   renderPlaywrightTest,
@@ -88,11 +89,16 @@ async function executePlaywright(input: ExecuteInput): Promise<RunnerOutcome> {
     `import { defineConfig, devices } from "@playwright/test";\nexport default defineConfig({ testDir: ".", fullyParallel: false, workers: 1, reporter: [["list"]], use: { baseURL: process.env.E2E_BASE_URL, trace: "retain-on-failure", screenshot: "only-on-failure", video: "on", ...devices["Desktop Chrome"] } });\n`,
     "utf8",
   );
+  const playwright = playwrightCommand();
+  // The generated config + spec live in the run dir (often the consumer's
+  // workspace, which has no node_modules) yet import "@playwright/test".
+  // NODE_PATH points their resolution back at OUR install.
+  const nodePath = [playwright.nodeModules, process.env.NODE_PATH].filter(Boolean).join(delimiter);
   const result = await command(
-    process.platform === "win32" ? "npx.cmd" : "npx",
-    ["playwright", "test", "--config", configPath, "--output", input.artifactsDir],
+    playwright.command,
+    [...playwright.args, "test", "--config", configPath, "--output", input.artifactsDir],
     input.cwd ?? process.cwd(),
-    { E2E_BASE_URL: input.target.baseUrl, ...(input.env ?? {}) },
+    { E2E_BASE_URL: input.target.baseUrl, ...(nodePath ? { NODE_PATH: nodePath } : {}), ...(input.env ?? {}) },
   );
   const completedAt = new Date().toISOString();
   // Playwright's list reporter writes the failure block (including the
@@ -119,6 +125,22 @@ function findFailedStepIndex(stderr: string, stepCount: number): number | undefi
   const failingLine = stepLines[stepLines.length - 1];
   const index = failingLine - 5;
   return index >= 0 && index < stepCount ? index : undefined;
+}
+
+/**
+ * Resolve THIS package's Playwright CLI so the replay works from any cwd —
+ * `npx playwright` in a consumer repo that doesn't depend on Playwright would
+ * download an arbitrary version (or fail). Falls back to npx only if the
+ * package's own install is somehow unresolvable.
+ */
+function playwrightCommand(): { command: string; args: string[]; nodeModules?: string } {
+  try {
+    const cli = createRequire(import.meta.url).resolve("@playwright/test/cli");
+    // .../node_modules/@playwright/test/cli.js → .../node_modules
+    return { command: process.execPath, args: [cli], nodeModules: dirname(dirname(dirname(cli))) };
+  } catch {
+    return { command: process.platform === "win32" ? "npx.cmd" : "npx", args: ["playwright"] };
+  }
 }
 
 /** A missing browser binary or a Playwright install failure is a runner problem, not a product failure. */

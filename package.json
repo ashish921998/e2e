@@ -12,7 +12,8 @@
   },
   "files": [
     "bin",
-    "src",
+    "src/agent",
+    "src/proof",
     "action.yml",
     "README.md"
   ],
@@ -22,6 +23,7 @@
     "dev:legacy": "vite --host 127.0.0.1 --mode older",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
+    "test:unit": "playwright test --config playwright.unit.config.ts",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:report": "playwright show-report",
@@ -33,18 +35,18 @@
   "dependencies": {
     "@e2b/desktop": "^2.3.1",
     "@playwright/test": "latest",
-    "@vitejs/plugin-react": "latest",
     "e2b": "^2.35.0",
     "playwright-core": "^1.61.1",
-    "react": "latest",
-    "react-dom": "latest",
-    "tsx": "^4.23.1",
-    "vite": "latest"
+    "tsx": "^4.23.1"
   },
   "devDependencies": {
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
-    "typescript": "latest"
+    "@vitejs/plugin-react": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "typescript": "latest",
+    "vite": "latest"
   }
 }

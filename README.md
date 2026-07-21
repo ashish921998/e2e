@@ -36,6 +36,19 @@ npx e2e-prove --url https://your-preview.app --goal "the cart total updates on a
 
 Exit code is the verdict, so CI gates on it. `--diff <file>` grounds the agent on the PR change; `--no-replay` runs exploration only.
 
+The CLI is self-contained: the deterministic replay resolves the package's **own** Playwright install (never `npx` in your repo), so the host repo needs no Playwright dependency — only the browser binary once (`npx playwright install chromium`).
+
+### Developing & testing this package
+
+```sh
+npm ci
+npm run typecheck    # covers src/, bin/, tests/
+npm run test:unit    # pure-logic specs — no dev server, no browser, no keys
+node bin/e2e-prove.mjs --help   # launcher smoke
+```
+
+CI (`.github/workflows/ci.yml`) runs all three on every PR. The unit suite covers the verdict gate (`decideVerdict`), the session→plan→Playwright-source round-trip, transcript redaction, and CLI arg parsing — everything decidable without a sandbox or model key.
+
 ### Supported platforms
 
 - **CI:** GitHub Actions (`ubuntu-latest`); portable to any CI via the `npx` CLI.
