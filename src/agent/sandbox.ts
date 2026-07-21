@@ -104,13 +104,12 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
     // The stream is a debugging convenience; its absence is non-fatal.
   }
 
-  // Keep a reference to the background Chrome handle so the SDK doesn't reap it.
-  let chromeHandle: { kill: () => Promise<boolean> } | undefined;
-  let cdpRelayHandle: { kill: () => Promise<boolean> } | undefined;
+  let chromePid: number | undefined;
+  let cdpRelayPid: number | undefined;
   const chromeLog = "/tmp/chrome-cdp.log";
 
   async function ensureChrome(): Promise<void> {
-    if (chromeHandle) return;
+    if (chromePid) return;
     // Resolve the binary first. The E2B SDK's `commands.run(background:true)`
     // returns a handle immediately WITHOUT throwing if the binary is missing or
     // exits on startup — the failure only surfaces if you `.wait()` the handle,
@@ -150,11 +149,8 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
     // interfaces so the host-forwarded port is reachable via getHost. We write
     // stdout/stderr to a log file so a CDP timeout can report the real reason
     // instead of a bare HTTP status.
-    //
-    // No positional URL: headless Chrome opened on `about:blank` (and even more
-    // so with a malformed `--about:blank`) can decide there is "nothing to do"
-    // and exit once it finishes setup — leaving CDP dead. With no URL, Chrome
-    // stays up as a long-running server, which is what a CDP target needs.
+    // `about:blank` is a positional URL (not the invalid `--about:blank` flag)
+    // and gives the CDP browser an initial target for Playwright to attach to.
     const args = [
       `--headless=new`,
       "--no-sandbox",
@@ -167,18 +163,16 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
       "--user-data-dir=/tmp/chrome-cdp-profile",
       `--remote-debugging-port=${debugPort}`,
       "--remote-debugging-address=0.0.0.0",
+      "about:blank",
     ];
-    // Run via the SDK's background mode (the documented way to keep a long-lived
-    // server process alive for the session) and tee Chrome's output to a log so
-    // a CDP timeout can show why. We keep the CommandHandle so Chrome isn't
-    // reaped and so close() can kill it.
-    const launch = `exec ${bin} ${args.join(" ")} > ${chromeLog} 2>&1`;
+    // Detach at the shell/process level. An E2B background CommandHandle is tied
+    // to its command session and Chrome was being reaped shortly after startup
+    // in CI, despite briefly logging "DevTools listening".
+    const launch = `nohup setsid ${bin} ${args.join(" ")} </dev/null >${chromeLog} 2>&1 & echo $!`;
     try {
-      const handle = await sandbox.commands.run(launch, {
-        background: true,
-        timeoutMs: 10_000,
-      } as Record<string, unknown>);
-      chromeHandle = handle as unknown as { kill: () => Promise<boolean> };
+      const result = await sandbox.commands.run(launch, { timeoutMs: 10_000 });
+      chromePid = Number.parseInt(result.stdout.trim(), 10);
+      if (!Number.isInteger(chromePid)) throw new Error(`invalid Chrome PID: ${result.stdout.trim()}`);
     } catch (error) {
       throw new Error(`Failed to start Chrome (${bin}) in the sandbox: ${safeMessage(error)}`);
     }
@@ -192,10 +186,11 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
         { timeoutMs: 60_000 },
       );
       const relay = await sandbox.commands.run(
-        `exec socat TCP-LISTEN:${forwardedDebugPort},bind=0.0.0.0,reuseaddr,fork TCP:127.0.0.1:${debugPort}`,
-        { background: true } as Record<string, unknown>,
+        `nohup setsid socat TCP-LISTEN:${forwardedDebugPort},bind=0.0.0.0,reuseaddr,fork TCP:127.0.0.1:${debugPort} </dev/null >/tmp/cdp-relay.log 2>&1 & echo $!`,
+        { timeoutMs: 10_000 },
       );
-      cdpRelayHandle = relay as unknown as { kill: () => Promise<boolean> };
+      cdpRelayPid = Number.parseInt(relay.stdout.trim(), 10);
+      if (!Number.isInteger(cdpRelayPid)) throw new Error(`invalid relay PID: ${relay.stdout.trim()}`);
     } catch (error) {
       throw new Error(`Failed to expose Chrome CDP in the sandbox: ${safeMessage(error)}`);
     }
@@ -297,12 +292,12 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
     streamUrl: () => sandbox.stream.getUrl(),
     async close() {
       try {
-        await cdpRelayHandle?.kill();
+        if (cdpRelayPid) await sandbox.commands.run(`kill ${cdpRelayPid} 2>/dev/null || true`);
       } catch {
         // The relay may already be gone with the sandbox.
       }
       try {
-        await chromeHandle?.kill();
+        if (chromePid) await sandbox.commands.run(`kill ${chromePid} 2>/dev/null || true`);
       } catch {
         // Chrome may already be gone with the sandbox.
       }
