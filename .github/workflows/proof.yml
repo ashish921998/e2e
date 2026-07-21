@@ -35,50 +35,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Demo mode only: boot this repo's app in CI and give the remote E2B
-      # browser a public URL. Runner localhost is not visible inside E2B.
-      # Adopters with a preview host delete this and trigger on deployment_status.
-      - name: Boot the demo app (CI preview)
-        id: app
-        shell: bash
-        run: |
-          npm ci
-          npx playwright install --with-deps chromium
-          ( __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=.trycloudflare.com \
-            npm run dev:local -- --port 4173 --host 127.0.0.1 >/tmp/app.log 2>&1 & )
-          for i in $(seq 1 120); do
-            curl -sf http://127.0.0.1:4173 >/dev/null && break || sleep 1
-          done
-
-          curl -fsSL \
-            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
-            -o "$RUNNER_TEMP/cloudflared"
-          chmod +x "$RUNNER_TEMP/cloudflared"
-          "$RUNNER_TEMP/cloudflared" tunnel --no-autoupdate \
-            --url http://127.0.0.1:4173 > /tmp/cloudflared.log 2>&1 &
-
-          url=""
-          for i in $(seq 1 60); do
-            url=$(grep -oE 'https://[-a-z0-9]+\.trycloudflare\.com' /tmp/cloudflared.log | head -n1 || true)
-            [ -n "$url" ] && curl -sf "$url" >/dev/null && break
-            sleep 1
-          done
-          if [ -z "$url" ]; then
-            cat /tmp/cloudflared.log
-            echo "::error::Cloudflare quick tunnel did not become ready"
-            exit 1
-          fi
-          echo "url=$url" >> "$GITHUB_OUTPUT"
-
-      # The reusable action does: resolve URL → E2B sandbox + agent → replay →
-      # upload artifacts → post verdict + video. `base-url` is explicit here
-      # (CI preview); omit it to auto-detect from a deployment_status event.
+      # This repo's persistent deployment is the demo target. Consumers pass
+      # their own preview URL or use deployment_status auto-detection.
       - name: Run e2e-proof
         uses: ./
         with:
-          base-url: ${{ github.event.inputs.url || steps.app.outputs.url }}
+          base-url: ${{ github.event.inputs.url || 'https://e2e-five-kappa.vercel.app/' }}
           goal: "Verify the Vintage Camera product page shows the low-stock warning."
         env:
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}   # GPT-5.6 (default model — the Build Week path)
-          # ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # alternative: Claude Opus 4.8
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

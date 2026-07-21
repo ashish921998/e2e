@@ -71,6 +71,7 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
   const template = options.template ?? process.env.E2B_TEMPLATE ?? DEFAULT_TEMPLATE;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const debugPort = options.debugPort ?? CHROME_DEBUG_PORT;
+  const forwardedDebugPort = debugPort + 1;
 
   // Lazy-load the heavy SDKs so importing this module (and the CLI's --help)
   // never pays for them or risks a loader stall.
@@ -172,6 +173,22 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
       throw new Error(`Failed to start Chrome (${bin}) in the sandbox: ${safeMessage(error)}`);
     }
 
+    // Chrome rejects the public E2B hostname with HTTP 500. Rewrite Host inside
+    // the sandbox, after E2B's gateway, and preserve WebSocket upgrades for CDP.
+    try {
+      await sandbox.commands.run(
+        "command -v nginx >/dev/null || (sudo apt-get -qq update && sudo apt-get -qq install -y nginx-light)",
+        { timeoutMs: 60_000 },
+      );
+      await sandbox.files.write(
+        "/tmp/cdp-nginx.conf",
+        `pid /tmp/cdp-nginx.pid;\nevents {}\nhttp {\n  server {\n    listen ${forwardedDebugPort};\n    location / {\n      proxy_pass http://127.0.0.1:${debugPort};\n      proxy_http_version 1.1;\n      proxy_set_header Host localhost:${debugPort};\n      proxy_set_header Upgrade $http_upgrade;\n      proxy_set_header Connection "upgrade";\n    }\n  }\n}\n`,
+      );
+      await sandbox.commands.run("nginx -c /tmp/cdp-nginx.conf", { timeoutMs: 10_000 });
+    } catch (error) {
+      throw new Error(`Failed to start the Chrome CDP proxy: ${safeMessage(error)}`);
+    }
+
   }
 
   /**
@@ -221,7 +238,7 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
     async connectPage() {
       if (!cached) {
         await ensureChrome();
-        const host = sandbox.getHost(debugPort);
+        const host = sandbox.getHost(forwardedDebugPort);
         // E2B forwards sandbox ports over TLS in production (getHost returns a
         // bare host like "<port>-<id>.e2b.dev", served at https://). Chrome's
         // CDP /json/version endpoint and the WebSocket upgrade are reachable
@@ -229,10 +246,7 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
         // local/debug sandbox (E2B_DEBUG), where ports are plain http.
         const scheme = process.env.E2B_CDP_SCHEME ?? (process.env.E2B_DEBUG ? "http" : "https");
         const cdpUrl = `${scheme}://${host}`;
-        // Chrome's DevTools HTTP server rejects non-local Host headers with
-        // HTTP 500. E2B necessarily forwards the public sandbox hostname, so
-        // override it for both discovery and the WebSocket upgrade.
-        const headers: Record<string, string> = { Host: `localhost:${debugPort}` };
+        const headers: Record<string, string> = {};
         if (sandbox.trafficAccessToken) headers["X-Access-Token"] = sandbox.trafficAccessToken;
         await waitForCdp(cdpUrl, headers);
         const browser = await chromium.connectOverCDP(cdpUrl, { headers });
@@ -274,6 +288,11 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
     getHost: (port) => sandbox.getHost(port),
     streamUrl: () => sandbox.stream.getUrl(),
     async close() {
+      try {
+        await sandbox.commands.run("nginx -s quit -c /tmp/cdp-nginx.conf 2>/dev/null || true");
+      } catch {
+        // The proxy may already be gone with the sandbox.
+      }
       try {
         if (chromePid) await sandbox.commands.run(`kill ${chromePid} 2>/dev/null || true`);
       } catch {
