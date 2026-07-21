@@ -148,7 +148,7 @@ function systemPrompt(): string {
     "You drive a real browser (via accessible role/name tools) and a shell, in an isolated sandbox.",
     "Use the provided tools only. Do not invent selectors, classes, or coordinates.",
     "Be efficient: navigate, interact, then assert the user-visible outcome.",
-    "Call observe_role or observe_text to assert the feature works — the assertion becomes part of the replayable proof.",
+    "Call observe_role or observe_text to assert the feature works — the assertion becomes part of the replayable proof. A run with no assertion proves nothing and cannot pass, so always assert the user-visible outcome before finishing.",
     "Call bash for terminal checks (curl, logs) but remember bash output is evidence, not proof.",
     "When done, call finish with verdict 'pass' or 'fail' and a one-sentence reason.",
     "If a feature is missing or an assertion fails, call finish with verdict 'fail'.",

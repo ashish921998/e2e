@@ -12,8 +12,9 @@ name: proof
 #
 # Install in your repo:
 #   1. Add this file as .github/workflows/e2e-proof.yml
-#   2. Add secrets E2B_API_KEY + (ANTHROPIC_API_KEY | OPENAI_API_KEY)
-#   3. Reference the published action: uses: ashish921998/e2e-proof@v1
+#   2. Add secrets E2B_API_KEY + OPENAI_API_KEY (GPT-5.6 is the default model;
+#      ANTHROPIC_API_KEY selects Claude instead).
+#   3. Reference the published action: uses: ashish921998/e2e@v1
 
 on:
   pull_request:
@@ -58,5 +59,5 @@ jobs:
           goal: "Verify the Vintage Camera product page shows the low-stock warning."
         env:
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}   # alternative model
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}   # GPT-5.6 (default model — the Build Week path)
+          # ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # alternative: Claude Opus 4.8

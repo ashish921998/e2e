@@ -10,6 +10,9 @@
  * replay video (from the engine), and the generated test into --out.
  *
  * Exit code = the verdict (0 passed / non-zero otherwise) so CI gates on it.
+ * A `passed` verdict requires all three: the recorded plan has an assertion
+ * step, the agent finished with verdict "pass", and the independent replay
+ * passed. See src/proof/verdict.ts.
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
@@ -21,7 +24,8 @@ import { runAgentLoop } from "../src/agent/loop";
 import { buildAgentVideo } from "../src/agent/video";
 import { deterministicPlanFromSession, normaliseBaseUrl } from "../src/proof/index";
 import { runProof } from "../src/proof/execute";
-import type { ProofStatus, ProofTarget } from "../src/proof/types";
+import { decideVerdict } from "../src/proof/verdict";
+import type { ProofPlan, ProofStatus, ProofTarget } from "../src/proof/types";
 
 interface ParsedArgs {
   url?: string;
@@ -31,6 +35,7 @@ interface ParsedArgs {
   targetId?: string;
   maxSteps?: string;
   model?: string;
+  provider?: "openai" | "anthropic";
   noReplay?: boolean;
   help?: boolean;
 }
@@ -73,6 +78,7 @@ try {
   const model = pickClient(process.env, {
     tools: TOOL_DESCRIPTORS,
     ...(args.model ? { model: args.model } : {}),
+    ...(args.provider ? { provider: args.provider } : {}),
   });
   const loop = await runAgentLoop({
     sandbox,
@@ -97,11 +103,14 @@ try {
   const planDir = join(outDir, "replay");
   await mkdir(planDir, { recursive: true });
   const interpretation = deterministicPlanFromSession(loop.session);
+  let replayStatus: ProofStatus | undefined;
+  let plan: ProofPlan | null = null;
+  let interpreterSource: string | undefined;
   if (!interpretation.ok) {
     log(`deterministic plan invalid: ${interpretation.error}`);
-    await writeSummary(outDir, { status: "incomplete", agentVerdict: loop.agentVerdict, error: interpretation.error });
-    exitCode = 2;
   } else {
+    plan = interpretation.plan;
+    interpreterSource = interpretation.source;
     await writeFile(
       join(planDir, "plan.json"),
       `${JSON.stringify({ plan: interpretation.plan, source: interpretation.source }, null, 2)}\n`,
@@ -113,32 +122,29 @@ try {
       log("running deterministic replay in a fresh browser (video:on)…");
       const { bundle } = await runProof({ plan: interpretation.plan, target, runDir: planDir });
       await writeFile(join(planDir, "bundle.json"), `${JSON.stringify(bundle, null, 2)}\n`, "utf8");
-      log(`replay verdict: ${bundle.result.status}`);
-      await writeSummary(outDir, {
-        status: bundle.result.status,
-        agentVerdict: loop.agentVerdict,
-        interpreter: interpretation.source,
-        replayDir: "replay",
-        ...(videoResult.ok ? { explorationVideo: "agent-exploration.mp4" } : {}),
-      });
-      // CI gate: 0 only when the independent replay passed.
-      exitCode = bundle.result.status === "passed" ? 0 : 1;
+      replayStatus = bundle.result.status;
+      log(`replay verdict: ${replayStatus}`);
     } else {
-      // Exploration-only: the agent's verdict is informational and is NEVER the
-      // gate. Only an independent replay can produce a `passed` verdict, so a
-      // skipped replay is `incomplete` and always exits non-zero. This keeps the
-      // core guarantee (loop.ts: "the proof is the independent replay, never just
-      // the model's word") even when --no-replay is used.
-      await writeSummary(outDir, {
-        status: "incomplete",
-        agentVerdict: loop.agentVerdict,
-        interpreter: interpretation.source,
-        replaySkipped: true,
-        ...(videoResult.ok ? { explorationVideo: "agent-exploration.mp4" } : {}),
-      });
-      exitCode = 2;
+      log("deterministic replay skipped (--no-replay)");
     }
   }
+
+  // 5. Gate on ALL THREE signals: plan has an assertion, agent passed, replay
+  // passed. The replay alone is not enough — a nav-only session replays green
+  // and proves nothing, and an agent `fail` is not overridden by a green replay.
+  const decision = decideVerdict({ plan, agentVerdict: loop.agentVerdict, replayStatus });
+  log(`verdict: ${decision.status} — ${decision.reason}`);
+  await writeSummary(outDir, {
+    status: decision.status,
+    agentVerdict: loop.agentVerdict,
+    interpreter: interpreterSource,
+    replayDir: args.noReplay ? undefined : "replay",
+    replaySkipped: args.noReplay ? true : undefined,
+    decision: { reason: decision.reason, signals: decision.signals },
+    ...(videoResult.ok ? { explorationVideo: "agent-exploration.mp4" } : {}),
+    ...(!interpretation.ok ? { error: interpretation.error } : {}),
+  });
+  exitCode = decision.passed ? 0 : decision.status === "incomplete" ? 2 : 1;
 } finally {
   await sandbox.close().catch((error: unknown) => {
     log(`sandbox close failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -155,6 +161,15 @@ interface Summary {
   replaySkipped?: boolean;
   explorationVideo?: string;
   error?: string;
+  /** Why the verdict was decided, plus the three signals it was based on. */
+  decision?: {
+    reason: string;
+    signals: {
+      hasAssertion: boolean;
+      agentVerdict?: { verdict: "pass" | "fail"; reason: string };
+      replayStatus?: ProofStatus;
+    };
+  };
 }
 
 async function writeSummary(outDir: string, summary: Summary): Promise<void> {
@@ -179,10 +194,11 @@ function usage(): string {
     "  --target-id <id>   Target id recorded in the bundle (default: 'preview').",
     "  --max-steps <n>    Agent step cap (default: 25).",
     "  --model <id>       Override the model id.",
+    "  --provider <p>     Model provider: openai (default) | anthropic. Also via E2E_PROVE_PROVIDER.",
     "  --no-replay        Skip the deterministic replay (exploration only; exits non-zero — never a pass gate).",
     "  -h, --help         Show this help.",
     "",
-    "Environment: E2B_API_KEY (required) + ANTHROPIC_API_KEY | OPENAI_API_KEY (one required).",
+    "Environment: E2B_API_KEY (required) + OPENAI_API_KEY (GPT-5.6, default) | ANTHROPIC_API_KEY (Claude).",
     "",
   ].join("\n");
 }
@@ -211,6 +227,9 @@ function parseArgs(argv: string[]): ParsedArgs {
         case "target-id": out.targetId = next; break;
         case "max-steps": out.maxSteps = next; break;
         case "model": out.model = next; break;
+        case "provider":
+          if (next === "openai" || next === "anthropic") out.provider = next;
+          break;
       }
       i++;
     }

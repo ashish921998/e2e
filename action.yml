@@ -102,6 +102,20 @@ runs:
       with:
         node-version: 20
 
+    - name: Install the action's own deps (self-contained)
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        # The Action's code lives in $GITHUB_ACTION_PATH (bin/, src/, package.json,
+        # package-lock.json) — checked out by GitHub. Installing its deps here means
+        # the consuming repo needs nothing but the workflow file + secrets.
+        npm ci
+        # The deterministic replay runs Playwright on the runner, so it needs the
+        # Chromium binary + OS deps here. E2B provides the *agent's* browser; the
+        # *replay's* browser is this one.
+        npx playwright install --with-deps chromium
+
     - name: Fetch the PR diff (grounds the agent on the change)
       id: diff
       if: steps.resolve.outputs.pr != ''
@@ -118,30 +132,37 @@ runs:
     - name: Run e2e-prove
       id: prove
       shell: bash
+      working-directory: ${{ github.action_path }}
       env:
         E2B_API_KEY: ${{ env.E2B_API_KEY }}
         ANTHROPIC_API_KEY: ${{ env.ANTHROPIC_API_KEY }}
         OPENAI_API_KEY: ${{ env.OPENAI_API_KEY }}
-        # Bring the repo-local tsx + e2b onto PATH for `npx e2e-prove`.
-        PATH_ADD: ${{ github.workspace }}/node_modules/.bin
+        E2E_PROVE_PROVIDER: ${{ env.E2E_PROVE_PROVIDER }}
+        INPUT_GOAL: ${{ inputs.goal }}
+        INPUT_MAX_STEPS: ${{ inputs.max-steps }}
+        INPUT_MODEL: ${{ inputs.model }}
+        INPUT_NO_REPLAY: ${{ inputs.no-replay }}
+        RESOLVED_URL: ${{ steps.resolve.outputs.url }}
+        DIFF_PATH: ${{ steps.diff.outputs.path }}
       run: |
         set -euo pipefail
-        export PATH="$PATH_ADD:$PATH"
         out="${{ github.workspace }}/proof-out"
-        diff_arg=""
-        if [ -n "${{ steps.diff.outputs.path }}" ] && [ -f "${{ steps.diff.outputs.path }}" ]; then
-          diff_arg="--diff ${{ steps.diff.outputs.path }}"
+        extra_args=()
+        if [ -n "$DIFF_PATH" ] && [ -f "$DIFF_PATH" ]; then
+          extra_args+=(--diff "$DIFF_PATH")
         fi
-        model_arg=""
-        if [ -n "${{ inputs.model }}" ]; then model_arg="--model ${{ inputs.model }}"; fi
+        if [ -n "$INPUT_MODEL" ]; then extra_args+=(--model "$INPUT_MODEL"); fi
+        if [ "$INPUT_NO_REPLAY" = "true" ]; then extra_args+=(--no-replay); fi
 
+        # Run from $GITHUB_ACTION_PATH so the repo-local tsx + src resolve and
+        # the spawned `npx playwright` finds this install's config. Outputs go to
+        # the consumer workspace so the artifact upload + PR comment still work.
         node bin/e2e-prove.mjs \
-          --url "${{ steps.resolve.outputs.url }}" \
-          --goal "${{ inputs.goal }}" \
-          --max-steps "${{ inputs.max-steps }}" \
+          --url "$RESOLVED_URL" \
+          --goal "$INPUT_GOAL" \
+          --max-steps "$INPUT_MAX_STEPS" \
           --out "$out" \
-          $diff_arg $model_arg \
-          ${{ inputs.no-replay == 'true' && '--no-replay' || '' }} \
+          "${extra_args[@]}" \
           || status=$?
 
         status=${status:-0}
@@ -150,7 +171,7 @@ runs:
           verdict=$(jq -r '.status // "unknown"' "$out/summary.json")
           echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
         fi
-        exit 0  # Don't fail the job yet — we still want to post the comment.
+        exit 0  # Don't fail the job yet — the gate step below sets the status.
 
     - name: Upload proof artifacts
       if: always()
@@ -212,3 +233,11 @@ runs:
           fi
         } > body.md
         gh pr comment "$pr" --body-file body.md
+
+    # The verdict gate. The run step always exits 0 so the comment can post; this
+    # final step translates the proof's exit code into the CI status. `|| '1'`
+    # ensures a crashed prove that wrote no output still fails red.
+    - name: Gate on the proof verdict
+      if: always()
+      shell: bash
+      run: exit ${{ steps.prove.outputs.exit || '1' }}

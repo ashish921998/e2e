@@ -4,7 +4,7 @@ e2e turns an agent's successful browser verification into a reviewable proof: a 
 
 ## e2e-proof — agentic web testing on E2B (GitHub Action + CLI)
 
-On top of the local engine, **e2e-proof** gives any web repo an autonomous tester that runs on every PR: it boots an isolated cloud sandbox (E2B — real Chrome + a terminal), an LLM agent (Claude Opus 4.8 or GPT-5.6) drives the browser to verify your change, then the same deterministic engine replays the recorded steps in a fresh browser to produce the verdict. Both the agent-exploration video and the replay video are posted to the PR. **An agent's claim is not the proof — the independent replay is.**
+On top of the local engine, **e2e-proof** gives any web repo an autonomous tester that runs on every PR: it boots an isolated cloud sandbox (E2B — real Chrome + a terminal), an LLM agent (GPT-5.6 by default; Claude Opus 4.8 also supported) drives the browser to verify your change, then the same deterministic engine replays the recorded steps in a fresh browser to produce the verdict. Both the agent-exploration video and the replay video are posted to the PR. **An agent's claim is not the proof — the independent replay is.**
 
 ### Install in any repo (one file + two secrets)
 
@@ -17,15 +17,15 @@ jobs:
     if: github.event.deployment_status.state == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: ashish921998/e2e-proof@v1
+      - uses: ashish921998/e2e@v1
         with:
           goal: "verify the changed feature works"
         env:
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # or OPENAI_API_KEY
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}         # GPT-5.6 (default); or ANTHROPIC_API_KEY
 ```
 
-Add repo secrets `E2B_API_KEY` + one of `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`. That's the whole install — no code copied, no engine to wire. The action auto-resolves the PR's preview URL from the `deployment_status` event (works with Vercel, Netlify, Cloudflare Pages, Render, Amplify); pass `base-url` to override, or trigger on `pull_request` with an explicit URL.
+Add repo secrets `E2B_API_KEY` + `OPENAI_API_KEY` (GPT-5.6 is the default; `ANTHROPIC_API_KEY` selects Claude Opus 4.8 instead). That's the whole install — no code copied, no engine to wire. The action is self-contained: it installs its own dependencies and the replay's Chromium on the runner. It auto-resolves the PR's preview URL from the `deployment_status` event (works with Vercel, Netlify, Cloudflare Pages, Render, Amplify); pass `base-url` to override, or trigger on `pull_request` with an explicit URL.
 
 ### Run locally or in any CI
 
@@ -39,10 +39,10 @@ Exit code is the verdict, so CI gates on it. `--diff <file>` grounds the agent o
 ### Supported platforms
 
 - **CI:** GitHub Actions (`ubuntu-latest`); portable to any CI via the `npx` CLI.
-- **Sandbox/runtime:** E2B cloud Linux VM (Ubuntu) — Chrome + terminal + recording provided by E2B; nothing installed on the runner.
+- **Sandbox/runtime:** E2B cloud Linux VM (Ubuntu) — provides Chrome + terminal + recording for the **agent's** exploration. The **replay** runs its own Playwright + Chromium on the GitHub runner (the Action installs both), which is what produces the verdict.
 - **CLI host:** Node 20+ on macOS / Linux / Windows (WSL).
 - **Target:** any web app reachable by URL (React/Vue/static/SSR — the agent drives real Chrome; framework-agnostic).
-- **Models:** Claude Opus 4.8 (Anthropic) or GPT-5.6 (OpenAI) — chosen by which key is present.
+- **Models:** GPT-5.6 (OpenAI, default) or Claude Opus 4.8 (Anthropic) — selected by which key is present when both are set (OpenAI wins), or override with `E2E_PROVE_PROVIDER` / `--provider`.
 
 ### How it works (the determinism guarantee)
 
@@ -127,9 +127,9 @@ node scripts/export-proof.mjs <proof-run-id> low-stock.proof.spec.ts
 
 Exports go to `proof-exports/` with a small sidecar that records the source proof run. Do not export failed or incomplete proofs.
 
-## Optional GPT-5.6 configuration
+## GPT-5.6 Build Week path
 
-The demo remains deterministic and offline-rehearsable. For live session interpretation, configure the server-side OpenAI integration with `OPENAI_API_KEY`; never expose this key in the browser or commit it. If no model call succeeds, e2e validates and uses its deterministic fallback rather than inventing a test.
+The submitted demo runs the autonomous tester with GPT-5.6 by configuring `OPENAI_API_KEY`; never expose this key in the browser or commit it. The separate local capture/reviewer remains offline-rehearsable and can use deterministic interpretation when a model is unavailable, but the Build Week agentic path defaults to GPT-5.6.
 
 ## Three-minute demo script
 

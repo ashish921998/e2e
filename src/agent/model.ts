@@ -5,9 +5,11 @@
  *   - AnthropicClient → Claude Opus 4.8 via the Messages API (tool_use loop)
  *   - OpenAIClient    → GPT-5.6 via the Responses API (function calling)
  *
- * pickClient(env) selects by which API key is present, so the engine is
- * BYO-model with no lock-in. The loop (agent/loop.ts) drives both through the
- * same turn-based interface, feeding back tool results and fresh screenshots
+ * pickClient(env, options) selects by which API key is present, so the engine
+ * is BYO-model with no lock-in. GPT-5.6 (OpenAI) is the default when both keys
+ * are set; an explicit `provider` option or `E2E_PROVE_PROVIDER` env var
+ * overrides the choice. The loop (agent/loop.ts) drives both through the same
+ * turn-based interface, feeding back tool results and fresh screenshots
  * (vision) each step.
  *
  * Anthropic tool-use shape (Messages API):
@@ -50,21 +52,39 @@ export interface ModelClient {
   continue(toolResults: ToolResultInput[], screenshot?: Buffer): Promise<ModelTurn>;
 }
 
+export type ModelProvider = "openai" | "anthropic";
+
 export interface ModelClientOptions {
   tools: ToolDescriptor[];
   maxTokens?: number;
   model?: string;
+  /** Force a provider instead of auto-detecting from env. */
+  provider?: ModelProvider;
 }
 
 const ANTHROPIC_MODEL = "claude-opus-4-8";
 const OPENAI_MODEL = "gpt-5.6";
 
-/** Pick a client by which key is present. Prefers Anthropic if both are set. */
+/**
+ * Pick a client by which key is present. Defaults to OpenAI (GPT-5.6) when both
+ * keys are set. An explicit `options.provider` wins, then `E2E_PROVE_PROVIDER`
+ * (openai|anthropic), then the OpenAI-first auto-detect.
+ */
 export function pickClient(env: NodeJS.ProcessEnv, options: ModelClientOptions): ModelClient {
-  if (env.ANTHROPIC_API_KEY) return new AnthropicClient(env.ANTHROPIC_API_KEY, options);
+  const requested = options.provider ?? (typeof env.E2E_PROVE_PROVIDER === "string" ? (env.E2E_PROVE_PROVIDER.toLowerCase() as ModelProvider) : undefined);
+  if (requested === "openai") {
+    if (!env.OPENAI_API_KEY) throw new Error("Provider 'openai' requested but OPENAI_API_KEY is not set.");
+    return new OpenAIClient(env.OPENAI_API_KEY, options);
+  }
+  if (requested === "anthropic") {
+    if (!env.ANTHROPIC_API_KEY) throw new Error("Provider 'anthropic' requested but ANTHROPIC_API_KEY is not set.");
+    return new AnthropicClient(env.ANTHROPIC_API_KEY, options);
+  }
+  // Auto-detect: OpenAI first, Anthropic as a fallback.
   if (env.OPENAI_API_KEY) return new OpenAIClient(env.OPENAI_API_KEY, options);
+  if (env.ANTHROPIC_API_KEY) return new AnthropicClient(env.ANTHROPIC_API_KEY, options);
   throw new Error(
-    "No model API key found. Set ANTHROPIC_API_KEY (Claude Opus 4.8) or OPENAI_API_KEY (GPT-5.6).",
+    "No model API key found. Set OPENAI_API_KEY (GPT-5.6, default) or ANTHROPIC_API_KEY (Claude Opus 4.8).",
   );
 }
 

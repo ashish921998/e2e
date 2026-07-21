@@ -11,30 +11,20 @@
  */
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { accessSync, constants } from "node:fs";
 import { spawn } from "node:child_process";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const entry = join(here, "e2e-prove.ts");
-const localTsx = join(here, "..", "node_modules", ".bin", "tsx");
-
-function isExecutable(path) {
-  try {
-    accessSync(path, constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const tsx = isExecutable(localTsx) ? localTsx : "tsx";
+// Resolve the dependency as a module rather than assuming npm created a
+// package-local .bin directory. npm commonly hoists tsx in consumer projects.
+const tsxCli = fileURLToPath(import.meta.resolve("tsx/cli"));
 const argv = process.argv.slice(2);
 
 // spawn (async) + a watchdog so we can detect a stall and retry. spawnSync
 // can't be killed cleanly mid-stall under some stdio setups.
-async function runWithWatchdog(bin, attempt) {
+async function runWithWatchdog(attempt) {
   return new Promise((resolve) => {
-    const child = spawn(bin, [entry, ...argv], { stdio: "inherit" });
+    const child = spawn(process.execPath, [tsxCli, entry, ...argv], { stdio: "inherit" });
     // tsx cold-start should be well under 20s; if it hasn't exited by then,
     // treat it as stalled, kill, and let the caller retry.
     const watchdog = setTimeout(() => {
@@ -53,21 +43,13 @@ async function runWithWatchdog(bin, attempt) {
 }
 
 async function main() {
-  let result = await runWithWatchdog(tsx, 1);
-  if (result.stalled && tsx !== "tsx") {
-    // Retry once with the PATH-resolved tsx name.
-    result = await runWithWatchdog("tsx", 2);
-  }
+  let result = await runWithWatchdog(1);
+  if (result.stalled) result = await runWithWatchdog(2);
   if (result.stalled) {
     process.stderr.write(
       "tsx stalled while loading the CLI. Re-run; if it persists, run `node_modules/.bin/tsx bin/e2e-prove.ts` directly.\n",
     );
     process.exit(124);
-  }
-  if (result.code === 127) {
-    process.stderr.write(
-      "tsx was not found. Install it (`npm i -D tsx`) or run with `node --import tsx/esm bin/e2e-prove.ts`.\n",
-    );
   }
   process.exit(result.code ?? 1);
 }
