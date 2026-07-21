@@ -33,8 +33,8 @@ jobs:
             test-results/**/video.webm
             playwright-report/
 
-      # Publish an inline-playable video: convert webm -> mp4, push to an orphan
-      # branch, and embed via jsDelivr (serves GitHub files with correct MIME).
+      # Publish an inline-playable video: convert webm -> mp4 and upload it as a
+      # Release asset (a GitHub-hosted URL, the best shot at inline <video>).
       - if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -45,27 +45,18 @@ jobs:
           status=${{ job.status == 'success' && '"✅ Proof passed."' || '"❌ Proof failed."' }}
 
           webm=$(find test-results -name video.webm | head -n1 || true)
-          embed=""
+          dl=""
           if [ -n "$webm" ]; then
             sudo apt-get -qq update && sudo apt-get -qq install -y ffmpeg
             ffmpeg -y -i "$webm" -movflags +faststart -pix_fmt yuv420p proof.mp4
 
-            branch=proof-videos
-            path="pr-$pr/proof.mp4"
-            tmp=$(mktemp -d)
-            git clone --depth 1 --branch "$branch" \
-              "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" "$tmp" \
-              || { git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" "$tmp"; git -C "$tmp" checkout --orphan "$branch"; git -C "$tmp" rm -rf . >/dev/null 2>&1 || true; }
-            mkdir -p "$tmp/pr-$pr"
-            cp proof.mp4 "$tmp/$path"
-            git -C "$tmp" config user.name  "github-actions[bot]"
-            git -C "$tmp" config user.email "github-actions[bot]@users.noreply.github.com"
-            git -C "$tmp" add "$path"
-            git -C "$tmp" commit -m "proof video for PR #$pr (run ${{ github.run_id }})" >/dev/null
-            git -C "$tmp" push origin "$branch"
-
-            sha=$(git -C "$tmp" rev-parse HEAD)
-            embed="https://cdn.jsdelivr.net/gh/${{ github.repository }}@${sha}/${path}"
+            tag="proof-videos"
+            asset="pr-${pr}-run-${{ github.run_id }}.mp4"
+            mv proof.mp4 "$asset"
+            gh release view "$tag" >/dev/null 2>&1 \
+              || gh release create "$tag" --title "Proof videos" --notes "Automated proof replay videos." --prerelease
+            gh release upload "$tag" "$asset" --clobber
+            dl="${{ github.server_url }}/${{ github.repository }}/releases/download/${tag}/${asset}"
           fi
 
           {
@@ -73,10 +64,11 @@ jobs:
             echo ""
             echo "$status"
             echo ""
-            if [ -n "$embed" ]; then
-              echo "<video src=\"$embed\" controls width=\"640\"></video>"
+            if [ -n "$dl" ]; then
+              # Bare release-asset URL — GitHub auto-embeds a player for hosted video.
+              echo "$dl"
               echo ""
-              echo "_Video not playing? [Open the run]($run) and download the \`proof-video\` artifact._"
+              echo "_Not playing inline? [Download the video]($dl) or [open the run]($run)._"
             else
               echo "⚠️ No proof video was produced. [See the run]($run)."
             fi
