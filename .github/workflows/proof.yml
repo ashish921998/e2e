@@ -35,13 +35,44 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # This repo's persistent deployment is the demo target. Consumers pass
-      # their own preview URL or use deployment_status auto-detection.
-      - name: Run e2e-proof
-        uses: ./
-        with:
-          base-url: ${{ github.event.inputs.url || 'https://e2e-five-kappa.vercel.app/' }}
-          goal: "Verify the Vintage Camera product page shows the low-stock warning."
+      - uses: actions/setup-node@v4
         env:
-          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          NODE_VERSION: 20
+        with:
+          node-version: 20
+
+      # Stable showcase path: run the semantic proof against the persistent
+      # deployment and record the browser. The reusable E2B action remains
+      # available to consumers through action.yml.
+      - name: Run recorded e2e proof
+        env:
+          E2E_BASE_URL: ${{ github.event.inputs.url || 'https://e2e-five-kappa.vercel.app/' }}
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npx playwright test tests/low-stock.spec.ts
+
+      - name: Upload proof video
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-proof-video
+          path: test-results/**/video.webm
+          if-no-files-found: error
+
+      - name: Post proof video to PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          src=$(find test-results -name video.webm | head -n1)
+          tag=proof-videos
+          asset="pr-${{ github.event.pull_request.number }}-run-${{ github.run_id }}.webm"
+          cp "$src" "$asset"
+          gh release view "$tag" >/dev/null 2>&1 || \
+            gh release create "$tag" --title "Proof videos" --notes "Automated proof videos." --prerelease
+          gh release upload "$tag" "$asset" --clobber
+          url="https://github.com/${{ github.repository }}/releases/download/${tag}/${asset}"
+          printf '### ✅ e2e proof passed\n\nVerified **Vintage Camera** shows **Only 3 left** on the Vercel deployment.\n\n%s\n\n[Download video](%s) · [Open run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n' \
+            "$url" "$url" > body.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file body.md
