@@ -229,9 +229,11 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
         // local/debug sandbox (E2B_DEBUG), where ports are plain http.
         const scheme = process.env.E2B_CDP_SCHEME ?? (process.env.E2B_DEBUG ? "http" : "https");
         const cdpUrl = `${scheme}://${host}`;
-        const headers = sandbox.trafficAccessToken
-          ? { "X-Access-Token": sandbox.trafficAccessToken }
-          : {};
+        // Chrome's DevTools HTTP server rejects non-local Host headers with
+        // HTTP 500. E2B necessarily forwards the public sandbox hostname, so
+        // override it for both discovery and the WebSocket upgrade.
+        const headers: Record<string, string> = { Host: `localhost:${debugPort}` };
+        if (sandbox.trafficAccessToken) headers["X-Access-Token"] = sandbox.trafficAccessToken;
         await waitForCdp(cdpUrl, headers);
         const browser = await chromium.connectOverCDP(cdpUrl, { headers });
         // connectOverCDP yields an already-connected browser; use its default
