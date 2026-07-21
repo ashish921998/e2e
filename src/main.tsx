@@ -75,8 +75,8 @@ function ProofPage() {
 
   return (
     <main className="proof-shell">
-      <nav aria-label="ProofMode navigation" className="proof-nav">
-        <a className="proof-brand" href="/">ProofMode</a>
+      <nav aria-label="e2e navigation" className="proof-nav">
+        <a className="proof-brand" href="/">e2e</a>
         <span>Agent work, independently replayed.</span>
       </nav>
       <section className="proof-intro">

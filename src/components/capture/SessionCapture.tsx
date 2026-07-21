@@ -56,7 +56,7 @@ export function SessionCapture() {
       const element = (nativeEvent.target as Element | null)?.closest("button, a, input, select");
       if (!element) return;
       // Do not record interactions with the recorder's own chrome — the
-      // generated test must drive the product, not ProofMode's capture panel.
+      // generated test must drive the product, not e2e's capture panel.
       if (element.closest(".capture-panel")) return;
       record({ type: "click", at: now(), role: semanticRole(element), accessibleName: accessibleName(element), label: "Live browser interaction" });
     };
@@ -111,9 +111,9 @@ export function SessionCapture() {
   const duration = useMemo(() => session?.completedAt ? `${((new Date(session.completedAt).getTime() - new Date(session.startedAt).getTime()) / 1000).toFixed(1)}s captured` : active ? "Recording live" : "Ready to capture", [active, session]);
 
   return (
-    <aside className="capture-panel" aria-label="ProofMode session capture">
+    <aside className="capture-panel" aria-label="e2e session capture">
       <div className="capture-heading">
-        <div><p className="capture-kicker">ProofMode recorder</p><h2>Capture the evidence</h2></div>
+        <div><p className="capture-kicker">e2e recorder</p><h2>Capture the evidence</h2></div>
         <span className={active ? "capture-live" : "capture-state"}>{duration}</span>
       </div>
       <p className="capture-copy">Records live navigation, product semantics, and browser interactions. The session stays on this device until you create a proof.</p>
