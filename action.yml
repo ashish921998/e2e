@@ -1,0 +1,243 @@
+name: e2e-proof
+author: ashish921998
+description: >
+  An agentic web tester for pull requests. Boots an isolated cloud sandbox
+  (E2B: Chrome + a terminal), an LLM agent drives the real browser to verify
+  your change, then a deterministic Playwright replay produces the verdict and
+  both the agent-exploration and replay videos are posted to the PR.
+  One workflow file + two secrets to install. Framework-agnostic.
+
+branding:
+  icon: play-circle
+  color: green
+
+inputs:
+  base-url:
+    description: >
+      Explicit URL to test. If omitted, the action auto-detects the PR's preview
+      URL from the `deployment_status` event (Vercel/Netlify/Cloudflare/Render/Amplify),
+      falling back to `preview-url`.
+    required: false
+  preview-url:
+    description: Fallback preview URL when neither `base-url` nor a deployment event is available.
+    required: false
+  goal:
+    description: What the agent should verify, in plain language.
+    required: false
+    default: "Verify the changed feature works against the running app."
+  max-steps:
+    description: Agent step cap (default 25).
+    required: false
+    default: "25"
+  model:
+    description: Optional model id override (e.g. claude-opus-4-8 or gpt-5.6).
+    required: false
+  no-replay:
+    description: If "true", skip the deterministic replay (exploration video + agent verdict only).
+    required: false
+    default: "false"
+  github-token:
+    description: Token for posting the PR comment and uploading the Release asset. Defaults to the workflow's GITHUB_TOKEN.
+    required: false
+    default: ${{ github.token }}
+  comment-on-pr:
+    description: If "true" (default), post the verdict + video link as a PR comment.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve preview URL and PR number
+      id: resolve
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        EVENT_NAME: ${{ github.event_name }}
+        DEPLOY_SHA: ${{ github.event.deployment_status.sha }}
+        DEPLOY_URL: ${{ github.event.deployment_status.target_url }}
+        ENV_URL: ${{ github.event.deployment.environment_url }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        BASE_URL_INPUT: ${{ inputs.base-url }}
+        PREVIEW_URL_INPUT: ${{ inputs.preview-url }}
+      run: |
+        set -euo pipefail
+        url=""
+        pr=""
+
+        # 1. Explicit input wins.
+        if [ -n "$BASE_URL_INPUT" ]; then
+          url="$BASE_URL_INPUT"
+        fi
+
+        # 2. deployment_status event (Vercel/Netlify/Cloudflare/Render/Amplify).
+        if [ -z "$url" ] && [ "$EVENT_NAME" = "deployment_status" ]; then
+          url="${DEPLOY_URL:-${ENV_URL:-}}"
+          sha="$DEPLOY_SHA"
+          if [ -n "$sha" ]; then
+            pr=$(gh api "/repos/${GITHUB_REPOSITORY}/commits/${sha}/pulls" \
+              --jq '.[0].number // ""' 2>/dev/null || echo "")
+          fi
+        fi
+
+        # 3. Fallback input.
+        if [ -z "$url" ]; then url="$PREVIEW_URL_INPUT"; fi
+
+        # PR number from the pull_request event if we didn't get it from the SHA.
+        if [ -z "$pr" ] && [ "$EVENT_NAME" = "pull_request" ]; then
+          pr="${{ github.event.pull_request.number }}"
+        fi
+
+        if [ -z "$url" ]; then
+          echo "::error::No preview URL could be resolved. Pass base-url, trigger on deployment_status, or set preview-url."
+          exit 1
+        fi
+
+        echo "url=$url" >> "$GITHUB_OUTPUT"
+        echo "pr=$pr" >> "$GITHUB_OUTPUT"
+        echo "Resolved target: $url (PR #$pr)"
+
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Install the action's own deps (self-contained)
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        # The Action's code lives in $GITHUB_ACTION_PATH (bin/, src/, package.json,
+        # package-lock.json) — checked out by GitHub. Installing its deps here means
+        # the consuming repo needs nothing but the workflow file + secrets.
+        npm ci
+        # The deterministic replay runs Playwright on the runner, so it needs the
+        # Chromium binary + OS deps here. E2B provides the *agent's* browser; the
+        # *replay's* browser is this one.
+        npx playwright install --with-deps chromium
+
+    - name: Fetch the PR diff (grounds the agent on the change)
+      id: diff
+      if: steps.resolve.outputs.pr != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+        pr="${{ steps.resolve.outputs.pr }}"
+        # A unified diff is compact, grounded context — never executed.
+        gh pr diff "$pr" > "${{ github.workspace }}/pr.diff" || true
+        echo "path=${{ github.workspace }}/pr.diff" >> "$GITHUB_OUTPUT"
+
+    - name: Run e2e-prove
+      id: prove
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      env:
+        E2B_API_KEY: ${{ env.E2B_API_KEY }}
+        ANTHROPIC_API_KEY: ${{ env.ANTHROPIC_API_KEY }}
+        OPENAI_API_KEY: ${{ env.OPENAI_API_KEY }}
+        E2E_PROVE_PROVIDER: ${{ env.E2E_PROVE_PROVIDER }}
+        INPUT_GOAL: ${{ inputs.goal }}
+        INPUT_MAX_STEPS: ${{ inputs.max-steps }}
+        INPUT_MODEL: ${{ inputs.model }}
+        INPUT_NO_REPLAY: ${{ inputs.no-replay }}
+        RESOLVED_URL: ${{ steps.resolve.outputs.url }}
+        DIFF_PATH: ${{ steps.diff.outputs.path }}
+      run: |
+        set -euo pipefail
+        out="${{ github.workspace }}/proof-out"
+        extra_args=()
+        if [ -n "$DIFF_PATH" ] && [ -f "$DIFF_PATH" ]; then
+          extra_args+=(--diff "$DIFF_PATH")
+        fi
+        if [ -n "$INPUT_MODEL" ]; then extra_args+=(--model "$INPUT_MODEL"); fi
+        if [ "$INPUT_NO_REPLAY" = "true" ]; then extra_args+=(--no-replay); fi
+
+        # Run from $GITHUB_ACTION_PATH so the repo-local tsx + src resolve and
+        # the spawned `npx playwright` finds this install's config. Outputs go to
+        # the consumer workspace so the artifact upload + PR comment still work.
+        node bin/e2e-prove.mjs \
+          --url "$RESOLVED_URL" \
+          --goal "$INPUT_GOAL" \
+          --max-steps "$INPUT_MAX_STEPS" \
+          --out "$out" \
+          "${extra_args[@]}" \
+          || status=$?
+
+        status=${status:-0}
+        echo "exit=$status" >> "$GITHUB_OUTPUT"
+        if [ -f "$out/summary.json" ]; then
+          verdict=$(jq -r '.status // "unknown"' "$out/summary.json")
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+        fi
+        exit 0  # Don't fail the job yet — the gate step below sets the status.
+
+    - name: Upload proof artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: e2e-proof
+        path: |
+          proof-out/
+
+    - name: Post verdict + video to the PR
+      if: ${{ always() && inputs.comment-on-pr == 'true' && steps.resolve.outputs.pr != '' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+        pr="${{ steps.resolve.outputs.pr }}"
+        run="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        verdict="${{ steps.prove.outputs.verdict }}"
+        case "$verdict" in
+          passed) emoji="✅"; status="Proof passed.";;
+          failed) emoji="❌"; status="Proof failed.";;
+          *) emoji="⚠️"; status="Proof did not produce a clean verdict.";;
+        esac
+
+        # Publish an inline-playable video as a Release asset (a GitHub-hosted
+        # URL — the best shot at inline <video> without a session cookie).
+        dl=""
+        agent_video="proof-out/agent-exploration.mp4"
+        replay_video="$(find proof-out/replay -name '*.webm' 2>/dev/null | head -n1 || true)"
+        src="$replay_video"
+        [ -n "$src" ] || src="$agent_video"
+        if [ -n "$src" ] && [ -f "$src" ]; then
+          sudo apt-get -qq update >/dev/null 2>&1 || true
+          sudo apt-get -qq install -y ffmpeg >/dev/null 2>&1 || true
+          ffmpeg -y -i "$src" -movflags +faststart -pix_fmt yuv420p proof.mp4 >/dev/null 2>&1 || true
+          if [ -f proof.mp4 ]; then
+            tag="proof-videos"
+            asset="pr-${pr}-run-${{ github.run_id }}.mp4"
+            mv proof.mp4 "$asset"
+            gh release view "$tag" >/dev/null 2>&1 \
+              || gh release create "$tag" --title "Proof videos" --notes "Automated proof videos." --prerelease
+            gh release upload "$tag" "$asset" --clobber
+            dl="${{ github.server_url }}/${{ github.repository }}/releases/download/${tag}/${asset}"
+          fi
+        fi
+
+        {
+          echo "### ${emoji} e2e-proof — ${status}"
+          echo ""
+          echo "An agent exercised **${{ steps.resolve.outputs.url }}** in an E2B sandbox, then a deterministic Playwright replay produced the verdict."
+          echo ""
+          if [ -n "$dl" ]; then
+            echo "$dl"
+            echo ""
+            echo "_Not playing inline? [Download the video]($dl) or [open the run]($run)._"
+          else
+            echo "⚠️ No video produced. [See the run]($run)."
+          fi
+        } > body.md
+        gh pr comment "$pr" --body-file body.md
+
+    # The verdict gate. The run step always exits 0 so the comment can post; this
+    # final step translates the proof's exit code into the CI status. `|| '1'`
+    # ensures a crashed prove that wrote no output still fails red.
+    - name: Gate on the proof verdict
+      if: always()
+      shell: bash
+      run: exit ${{ steps.prove.outputs.exit || '1' }}

@@ -1,0 +1,78 @@
+name: proof
+
+# Reference workflow — this repo's own PRs are the live demo, and this file is
+# copy-paste documentation for adopting e2e-proof in any web repo.
+#
+# Two install modes are shown:
+#   (A) deployment_status — the default, drop-in path for Vercel/Netlify/etc.
+#       It fires when the PR's preview finishes deploying and reads that URL
+#       from the event. Uncomment the trigger below to use it.
+#   (B) pull_request — used here so the demo runs against a preview booted
+#       in-CI (`npm run dev:local`) without an external deploy host.
+#
+# Install in your repo:
+#   1. Add this file as .github/workflows/e2e-proof.yml
+#   2. Add secrets E2B_API_KEY + OPENAI_API_KEY (GPT-5.6 is the default model;
+#      ANTHROPIC_API_KEY selects Claude instead).
+#   3. Reference the published action: uses: ashish921998/e2e@v1
+
+on:
+  pull_request:
+  # deployment_status:   # ← uncomment for the zero-config preview path (A)
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "URL to test (manual demo run)"
+        required: true
+
+permissions:
+  contents: write        # upload the video Release asset
+  pull-requests: write   # post the verdict comment
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        env:
+          NODE_VERSION: 20
+        with:
+          node-version: 20
+
+      # Stable showcase path: run the semantic proof against the persistent
+      # deployment and record the browser. The reusable E2B action remains
+      # available to consumers through action.yml.
+      - name: Run recorded e2e proof
+        env:
+          E2E_BASE_URL: ${{ github.event.inputs.url || 'https://e2e-five-kappa.vercel.app/' }}
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npx playwright test tests/low-stock.spec.ts
+
+      - name: Upload proof video
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-proof-video
+          path: test-results/**/video.webm
+          if-no-files-found: error
+
+      - name: Post proof video to PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          src=$(find test-results -name video.webm | head -n1)
+          tag=proof-videos
+          asset="pr-${{ github.event.pull_request.number }}-run-${{ github.run_id }}.webm"
+          cp "$src" "$asset"
+          gh release view "$tag" >/dev/null 2>&1 || \
+            gh release create "$tag" --title "Proof videos" --notes "Automated proof videos." --prerelease
+          gh release upload "$tag" "$asset" --clobber
+          url="https://github.com/${{ github.repository }}/releases/download/${tag}/${asset}"
+          printf '### ✅ e2e proof passed\n\nVerified **Vintage Camera** shows **Only 3 left** on the Vercel deployment.\n\n%s\n\n[Download video](%s) · [Open run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n' \
+            "$url" "$url" > body.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file body.md

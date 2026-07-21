@@ -1,8 +1,21 @@
 {
-  "name": "e2e",
-  "private": true,
-  "version": "0.0.1",
+  "name": "e2e-prove",
+  "version": "0.2.0",
+  "description": "Agentic web tester for pull requests: an LLM agent drives a real browser in an E2B sandbox, then a deterministic Playwright replay produces the verdict and posts the videos to the PR.",
+  "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "e2e-prove": "bin/e2e-prove.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "action.yml",
+    "README.md"
+  ],
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "dev:local": "vite --host 127.0.0.1 --mode updated",
@@ -13,16 +26,22 @@
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:report": "playwright show-report",
     "proof:rehearse": "node scripts/reliability.mjs",
-    "proof:export": "node scripts/export-proof.mjs"
+    "proof:export": "node scripts/export-proof.mjs",
+    "prove": "node bin/e2e-prove.mjs",
+    "typecheck": "tsc -b"
   },
   "dependencies": {
+    "@e2b/desktop": "^2.3.1",
+    "@playwright/test": "latest",
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
+    "e2b": "^2.35.0",
+    "playwright-core": "^1.61.1",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "tsx": "^4.23.1",
+    "vite": "latest"
   },
   "devDependencies": {
-    "@playwright/test": "latest",
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",

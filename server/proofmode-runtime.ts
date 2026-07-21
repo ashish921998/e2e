@@ -1,23 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
-import { join, normalize, relative, resolve } from "node:path";
-import { spawn } from "node:child_process";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { join, normalize, resolve } from "node:path";
 import type { Plugin, ViteDevServer } from "vite";
 import {
   GptSessionInterpreter,
   deterministicPlanFromSession,
   getTarget,
   defineTargets,
-  createProofBundle,
-  renderPlaywrightTest,
   type ModelProofClient,
   type ProofArtifact,
   type ProofBundle,
-  type ProofPlan,
   type ProofTarget,
   type RecordedSession,
 } from "../src/proof";
+import { runProof } from "../src/proof/execute";
 import { redact } from "../src/proof/redact";
 
 const ROOT = resolve(process.cwd());
@@ -85,19 +82,23 @@ async function handleRun(req: import("node:http").IncomingMessage, res: import("
       : deterministicPlanFromSession(request.value.session);
     if (!interpretation.ok) return sendJson(res, 422, { error: interpretation.error });
 
-    const testPath = join(runDir, "proof.spec.ts");
-    const planPath = join(runDir, "plan.json");
-    const testSource = renderPlaywrightTest(interpretation.plan);
-    await writeFile(testPath, testSource, "utf8");
-    await writeFile(planPath, JSON.stringify({ plan: interpretation.plan, source: interpretation.source }, null, 2), "utf8");
+    // Persist the interpreted plan and the redacted source session as evidence
+    // alongside the run. The test source itself is written by runProof so the
+    // renderer is the only component that emits JS.
+    await writeFile(join(runDir, "plan.json"), JSON.stringify({ plan: interpretation.plan, source: interpretation.source }, null, 2), "utf8");
     const safeSession = redactSession(request.value.session);
     await writeFile(join(runDir, "session.json"), JSON.stringify(safeSession, null, 2), "utf8");
 
-    const outcome = await executePlaywright(runDir, join(runDir, "artifacts"), target, interpretation.plan);
-    const artifacts = await collectArtifacts(runDir);
-    const bundle = createProofBundle({ id: runId, plan: interpretation.plan, target, outcome, artifacts });
+    const { bundle } = await runProof({ plan: interpretation.plan, target, runDir });
+    // runProof returns artifact paths relative to the run dir; remap them to the
+    // Vite-served URLs the reviewer expects.
+    const artifacts: ProofArtifact[] = bundle.artifacts.map((artifact: ProofArtifact) => ({
+      ...artifact,
+      path: `/proof-runs/${runId}/${artifact.path}`,
+    }));
     const serialized: SerializedBundle = {
       ...bundle,
+      artifacts,
       interpreter: interpretation.source,
       terminalTranscript: safeSession.terminalTranscript,
       runUrl: `/proof-runs/${runId}/`,
@@ -118,52 +119,6 @@ function targetsForRequest(req: import("node:http").IncomingMessage) {
     targets.push({ id: "production", label: "Production", kind: "production", baseUrl: process.env.PROOFMODE_PRODUCTION_URL });
   }
   return defineTargets(targets);
-}
-
-async function executePlaywright(runDir: string, outputDir: string, target: ProofTarget, plan: ProofPlan) {
-  const startedAt = new Date().toISOString();
-  const configPath = join(runDir, "playwright.config.ts");
-  await writeFile(configPath, `import { defineConfig, devices } from "@playwright/test";\nexport default defineConfig({ testDir: ".", fullyParallel: false, workers: 1, reporter: [["list"]], use: { baseURL: process.env.E2E_BASE_URL, trace: "retain-on-failure", screenshot: "only-on-failure", video: "on", ...devices["Desktop Chrome"] } });\n`, "utf8");
-  const result = await command(process.platform === "win32" ? "npx.cmd" : "npx", ["playwright", "test", "--config", configPath, "--output", outputDir], {
-    E2E_BASE_URL: target.baseUrl,
-  });
-  const completedAt = new Date().toISOString();
-  // Playwright's list reporter writes the failure block (including the
-  // `proof.spec.ts:<line>:<col>` reference) to stdout, while stderr carries
-  // only Node warnings — search both for the failing step.
-  const combinedOutput = `${result.stdout}\n${result.stderr}`;
-  const failedStepIndex = result.exitCode === 0 ? undefined : findFailedStepIndex(combinedOutput, plan.steps.length);
-  const phase = result.exitCode === 0 ? ("test" as const) : inferFailurePhase(result);
-  return { ...result, stderr: result.exitCode === 0 ? "" : result.stderr, startedAt, completedAt, failedStepIndex, phase };
-}
-
-/**
- * The generated test renders one plan step per source line, with the first
- * step at line 5 (1-indexed): line 1 import, 2 blank, 3 test(), 4 intent
- * comment. Playwright's failure output references the failing assertion with
- * `proof.spec.ts:<line>:<col>`. Map that back to a step index so the reviewer
- * can mark the right step failed and later steps skipped.
- */
-function findFailedStepIndex(stderr: string, stepCount: number): number | undefined {
-  const lines = [...stderr.matchAll(/proof\.spec\.ts:(\d+):\d+/g)].map((match) => Number(match[1]));
-  // Line 3 is the test() declaration header shown by the list reporter; ignore it.
-  const stepLines = lines.filter((line) => line >= 5);
-  if (stepLines.length === 0) return undefined;
-  const failingLine = stepLines[stepLines.length - 1];
-  const index = failingLine - 5;
-  return index >= 0 && index < stepCount ? index : undefined;
-}
-
-/** A missing browser binary or a Playwright install failure is a runner problem, not a product failure. */
-function inferFailurePhase(result: { stderr: string; stdout: string }): "compile" | "runner" | "test" {
-  const text = combinedOutputFor(result);
-  if (/executable doesn't exist|playwright.*not found|command not found|ENOTDIR|err_spawn|spawn npx/i.test(text)) return "runner";
-  if (/SyntaxError|Could not transform|Transform failed|failed to import/i.test(text)) return "compile";
-  return "test";
-}
-
-function combinedOutputFor(result: { stderr: string; stdout: string }): string {
-  return `${result.stdout}\n${result.stderr}`;
 }
 
 class ResponsesProofClient implements ModelProofClient {
@@ -219,37 +174,11 @@ async function readJson(req: import("node:http").IncomingMessage): Promise<unkno
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
-async function collectArtifacts(runDir: string): Promise<ProofArtifact[]> {
-  const entries = await filesBelow(runDir); const result: ProofArtifact[] = [];
-  for (const path of entries) {
-    const rel = relative(runDir, path).replaceAll("\\", "/");
-    const kind = rel.endsWith(".webm") ? "video" : rel.endsWith(".png") ? "screenshot" : rel.endsWith(".zip") ? "trace" : rel.endsWith(".spec.ts") ? "test" : undefined;
-    if (kind) result.push({ kind, label: rel, path: `/proof-runs/${relative(RUNS_ROOT, path).replaceAll("\\", "/")}`, mimeType: kind === "video" ? "video/webm" : kind === "screenshot" ? "image/png" : undefined });
-  }
-  return result;
-}
-
-async function filesBelow(path: string): Promise<string[]> {
-  const children = await readdir(path, { withFileTypes: true });
-  const nested = await Promise.all(children.map(async (entry) => entry.isDirectory() ? filesBelow(join(path, entry.name)) : [join(path, entry.name)]));
-  return nested.flat();
-}
-
 async function serveArtifact(pathname: string, res: import("node:http").ServerResponse) {
   const requested = normalize(join(RUNS_ROOT, pathname.slice("/proof-runs/".length)));
   if (!requested.startsWith(`${RUNS_ROOT}/`) || !existsSync(requested) || (await stat(requested)).isDirectory()) { res.statusCode = 404; res.end("Not found"); return; }
   const mime = requested.endsWith(".webm") ? "video/webm" : requested.endsWith(".png") ? "image/png" : requested.endsWith(".zip") ? "application/zip" : requested.endsWith(".json") ? "application/json" : "text/plain; charset=utf-8";
   res.writeHead(200, { "Content-Type": mime, "Cache-Control": "no-store" }); res.end(await readFile(requested));
-}
-
-function command(commandName: string, args: string[], extraEnv: Record<string, string>): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  return new Promise((resolveResult) => {
-    const child = spawn(commandName, args, { cwd: ROOT, env: { ...process.env, ...extraEnv }, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "", stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk; }); child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", (error) => resolveResult({ exitCode: 1, stdout, stderr: error.message }));
-    child.on("close", (code) => resolveResult({ exitCode: code ?? 1, stdout, stderr }));
-  });
 }
 
 function redactSession(session: RecordedSession): RecordedSession {

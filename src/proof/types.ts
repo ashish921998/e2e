@@ -1,6 +1,6 @@
 /**
  * The portable, dependency-free contract between the recorder, the model
- * interpreter, the test runner and the ProofMode UI.
+ * interpreter, the test runner and the e2e UI.
  */
 
 export const PROOF_PLAN_VERSION = 1 as const;
