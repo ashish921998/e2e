@@ -1,0 +1,21 @@
+{
+  "name": "rifts",
+  "version": "0.1.0",
+  "description": "Deterministic per-rift port assignment for parallel rift workspaces",
+  "type": "module",
+  "bin": {
+    "rifts": "./dist/cli.js"
+  },
+  "main": "./dist/cli.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test dist/__tests__/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}
