@@ -167,7 +167,13 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
       if (!cached) {
         await ensureChrome();
         const host = sandbox.getHost(debugPort);
-        const cdpUrl = `http://${host}`;
+        // E2B forwards sandbox ports over TLS in production (getHost returns a
+        // bare host like "<port>-<id>.e2b.dev", served at https://). Chrome's
+        // CDP /json/version endpoint and the WebSocket upgrade are reachable
+        // over that https URL. Override with E2B_CDP_SCHEME=http only for a
+        // local/debug sandbox (E2B_DEBUG), where ports are plain http.
+        const scheme = process.env.E2B_CDP_SCHEME ?? (process.env.E2B_DEBUG ? "http" : "https");
+        const cdpUrl = `${scheme}://${host}`;
         await waitForCdp(cdpUrl);
         const browser = await chromium.connectOverCDP(cdpUrl);
         // connectOverCDP yields an already-connected browser; use its default

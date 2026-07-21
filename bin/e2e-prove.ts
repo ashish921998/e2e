@@ -64,6 +64,10 @@ const log = (message: string): void => {
 const sandbox = await startSandbox();
 log(`sandbox ready; live view: ${sandbox.streamUrl()}`);
 
+// exitCode is set inside the try, then process.exit runs AFTER the finally so
+// the async sandbox.close() teardown actually completes. Calling process.exit
+// inside the try would halt the loop first and leak the E2B sandbox each run.
+let exitCode = 0;
 try {
 // 2. Run the agent loop to produce a RecordedSession.
   const model = pickClient(process.env, {
@@ -96,49 +100,51 @@ try {
   if (!interpretation.ok) {
     log(`deterministic plan invalid: ${interpretation.error}`);
     await writeSummary(outDir, { status: "incomplete", agentVerdict: loop.agentVerdict, error: interpretation.error });
-    process.exit(2);
-  }
-  await writeFile(
-    join(planDir, "plan.json"),
-    `${JSON.stringify({ plan: interpretation.plan, source: interpretation.source }, null, 2)}\n`,
-    "utf8",
-  );
-
-  let exitCode: number;
-  if (args.noReplay !== true) {
-    const target: ProofTarget = { id: targetId, label: `Preview (${targetId})`, kind: "preview", baseUrl };
-    log("running deterministic replay in a fresh browser (video:on)…");
-    const { bundle } = await runProof({ plan: interpretation.plan, target, runDir: planDir });
-    await writeFile(join(planDir, "bundle.json"), `${JSON.stringify(bundle, null, 2)}\n`, "utf8");
-    log(`replay verdict: ${bundle.result.status}`);
-    await writeSummary(outDir, {
-      status: bundle.result.status,
-      agentVerdict: loop.agentVerdict,
-      interpreter: interpretation.source,
-      replayDir: "replay",
-      ...(videoResult.ok ? { explorationVideo: "agent-exploration.mp4" } : {}),
-    });
-    // CI gate: 0 only when the independent replay passed.
-    exitCode = bundle.result.status === "passed" ? 0 : 1;
-  } else {
-    // Exploration-only: the agent's verdict is informational and is NEVER the
-    // gate. Only an independent replay can produce a `passed` verdict, so a
-    // skipped replay is `incomplete` and always exits non-zero. This keeps the
-    // core guarantee (loop.ts: "the proof is the independent replay, never just
-    // the model's word") even when --no-replay is used.
-    await writeSummary(outDir, {
-      status: "incomplete",
-      agentVerdict: loop.agentVerdict,
-      interpreter: interpretation.source,
-      replaySkipped: true,
-      ...(videoResult.ok ? { explorationVideo: "agent-exploration.mp4" } : {}),
-    });
     exitCode = 2;
+  } else {
+    await writeFile(
+      join(planDir, "plan.json"),
+      `${JSON.stringify({ plan: interpretation.plan, source: interpretation.source }, null, 2)}\n`,
+      "utf8",
+    );
+
+    if (args.noReplay !== true) {
+      const target: ProofTarget = { id: targetId, label: `Preview (${targetId})`, kind: "preview", baseUrl };
+      log("running deterministic replay in a fresh browser (video:on)…");
+      const { bundle } = await runProof({ plan: interpretation.plan, target, runDir: planDir });
+      await writeFile(join(planDir, "bundle.json"), `${JSON.stringify(bundle, null, 2)}\n`, "utf8");
+      log(`replay verdict: ${bundle.result.status}`);
+      await writeSummary(outDir, {
+        status: bundle.result.status,
+        agentVerdict: loop.agentVerdict,
+        interpreter: interpretation.source,
+        replayDir: "replay",
+        ...(videoResult.ok ? { explorationVideo: "agent-exploration.mp4" } : {}),
+      });
+      // CI gate: 0 only when the independent replay passed.
+      exitCode = bundle.result.status === "passed" ? 0 : 1;
+    } else {
+      // Exploration-only: the agent's verdict is informational and is NEVER the
+      // gate. Only an independent replay can produce a `passed` verdict, so a
+      // skipped replay is `incomplete` and always exits non-zero. This keeps the
+      // core guarantee (loop.ts: "the proof is the independent replay, never just
+      // the model's word") even when --no-replay is used.
+      await writeSummary(outDir, {
+        status: "incomplete",
+        agentVerdict: loop.agentVerdict,
+        interpreter: interpretation.source,
+        replaySkipped: true,
+        ...(videoResult.ok ? { explorationVideo: "agent-exploration.mp4" } : {}),
+      });
+      exitCode = 2;
+    }
   }
-  process.exit(exitCode);
 } finally {
-  await sandbox.close().catch(() => {});
+  await sandbox.close().catch((error: unknown) => {
+    log(`sandbox close failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
 }
+process.exit(exitCode);
 }
 
 interface Summary {

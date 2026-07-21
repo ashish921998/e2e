@@ -11,7 +11,7 @@
  */
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { accessSync, X_OK } from "node:fs";
+import { accessSync, constants } from "node:fs";
 import { spawn } from "node:child_process";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -20,7 +20,7 @@ const localTsx = join(here, "..", "node_modules", ".bin", "tsx");
 
 function isExecutable(path) {
   try {
-    accessSync(path, X_OK);
+    accessSync(path, constants.X_OK);
     return true;
   } catch {
     return false;
