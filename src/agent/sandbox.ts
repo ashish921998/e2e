@@ -144,19 +144,24 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
     // Launch headless Chrome with a remote debugging port bound to all
     // interfaces so the host-forwarded port is reachable via getHost. We write
     // stdout/stderr to a log file so a CDP timeout can report the real reason
-    // instead of a bare HTTP status. `about:blank` must be a positional URL,
-    // never `--about:blank` (an unknown flag that can make Chrome exit at once).
+    // instead of a bare HTTP status.
+    //
+    // No positional URL: headless Chrome opened on `about:blank` (and even more
+    // so with a malformed `--about:blank`) can decide there is "nothing to do"
+    // and exit once it finishes setup — leaving CDP dead. With no URL, Chrome
+    // stays up as a long-running server, which is what a CDP target needs.
     const args = [
       `--headless=new`,
       "--no-sandbox",
       "--disable-gpu",
+      "--disable-software-rasterizer",
       "--disable-dev-shm-usage",
       "--no-first-run",
       "--no-default-browser-check",
+      "--disable-features=Translate,OptimizationGuide,MediaRouter",
       "--user-data-dir=/tmp/chrome-cdp-profile",
       `--remote-debugging-port=${debugPort}`,
       "--remote-debugging-address=0.0.0.0",
-      "about:blank",
     ];
     // Run via the SDK's background mode (the documented way to keep a long-lived
     // server process alive for the session) and tee Chrome's output to a log so
@@ -182,10 +187,13 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
   async function diagnoseCdpFailure(url: string, lastError: string): Promise<string> {
     const parts = [`Chrome CDP did not become ready at ${url}: ${lastError}`];
     try {
+      // Dump: is Chrome alive, is the port up, and the FULL chrome log minus the
+      // known-noisy dbus/GCM lines that bury the real fatal message.
       const ps = await sandbox.commands.run(
         `echo "[ps chrome]"; ps aux | grep -iE 'chrome|chromium' | grep -v grep || echo "(no chrome process)"; ` +
           `echo "[port 9222]"; (ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null) | grep 9222 || echo "(nothing listening on 9222)"; ` +
-          `echo "[chrome.log]"; tail -n 20 ${chromeLog} 2>/dev/null || echo "(no chrome log)"`,
+          `echo "[chrome.log (dbus/gcm noise filtered)]"; ` +
+          `grep -vE 'dbus|object_proxy|gcm|DEPRECATED_ENDPOINT' ${chromeLog} 2>/dev/null | tail -n 80 || echo "(no chrome log)"`,
         { timeoutMs: 10_000 },
       );
       parts.push(`\n--- sandbox diagnostics ---\n${(ps.stdout || "")+(ps.stderr || "")}`.trimEnd());
