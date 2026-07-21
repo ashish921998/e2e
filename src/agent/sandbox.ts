@@ -198,12 +198,12 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
     return parts.join("\n");
   }
 
-  async function waitForCdp(url: string, timeoutMs = 30_000): Promise<void> {
+  async function waitForCdp(url: string, headers: Record<string, string>, timeoutMs = 30_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     let lastError = "not attempted";
     while (Date.now() < deadline) {
       try {
-        const response = await fetch(`${url}/json/version`);
+        const response = await fetch(`${url}/json/version`, { headers });
         if (response.ok) return;
         lastError = `HTTP ${response.status}`;
       } catch (error) {
@@ -229,8 +229,11 @@ export async function startSandbox(options: SandboxOptions = {}): Promise<ProofS
         // local/debug sandbox (E2B_DEBUG), where ports are plain http.
         const scheme = process.env.E2B_CDP_SCHEME ?? (process.env.E2B_DEBUG ? "http" : "https");
         const cdpUrl = `${scheme}://${host}`;
-        await waitForCdp(cdpUrl);
-        const browser = await chromium.connectOverCDP(cdpUrl);
+        const headers = sandbox.trafficAccessToken
+          ? { "X-Access-Token": sandbox.trafficAccessToken }
+          : {};
+        await waitForCdp(cdpUrl, headers);
+        const browser = await chromium.connectOverCDP(cdpUrl, { headers });
         // connectOverCDP yields an already-connected browser; use its default
         // context so we share the open tab rather than spawning a second one.
         const context = browser.contexts()[0] ?? (await browser.newContext());
