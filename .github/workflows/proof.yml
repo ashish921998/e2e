@@ -4,7 +4,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write        # push the mp4 to the proof-videos branch
   pull-requests: write
 
 jobs:
@@ -33,21 +33,52 @@ jobs:
             test-results/**/video.webm
             playwright-report/
 
-      # GitHub renders uploaded video inline in PR comments.
+      # Publish an inline-playable video: convert webm -> mp4, push to an orphan
+      # branch, and embed via jsDelivr (serves GitHub files with correct MIME).
       - if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -e
+          pr="${{ github.event.pull_request.number }}"
           run="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          status=${{ job.status == 'success' && '"✅ Proof passed."' || '"❌ Proof failed."' }}
+
+          webm=$(find test-results -name video.webm | head -n1 || true)
+          embed=""
+          if [ -n "$webm" ]; then
+            sudo apt-get -qq update && sudo apt-get -qq install -y ffmpeg
+            ffmpeg -y -i "$webm" -movflags +faststart -pix_fmt yuv420p proof.mp4
+
+            branch=proof-videos
+            path="pr-$pr/proof.mp4"
+            tmp=$(mktemp -d)
+            git clone --depth 1 --branch "$branch" \
+              "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" "$tmp" \
+              || { git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" "$tmp"; git -C "$tmp" checkout --orphan "$branch"; git -C "$tmp" rm -rf . >/dev/null 2>&1 || true; }
+            mkdir -p "$tmp/pr-$pr"
+            cp proof.mp4 "$tmp/$path"
+            git -C "$tmp" config user.name  "github-actions[bot]"
+            git -C "$tmp" config user.email "github-actions[bot]@users.noreply.github.com"
+            git -C "$tmp" add "$path"
+            git -C "$tmp" commit -m "proof video for PR #$pr (run ${{ github.run_id }})" >/dev/null
+            git -C "$tmp" push origin "$branch"
+
+            sha=$(git -C "$tmp" rev-parse HEAD)
+            embed="https://cdn.jsdelivr.net/gh/${{ github.repository }}@${sha}/${path}"
+          fi
+
           {
             echo "### Proof replay"
             echo ""
-            if [ "${{ job.status }}" = "success" ]; then echo "✅ Proof passed."; else echo "❌ Proof failed."; fi
+            echo "$status"
             echo ""
-            if find test-results -name video.webm | grep -q .; then
-              echo "📹 [Download proof video]($run) — open the run and grab the \`proof-video\` artifact."
+            if [ -n "$embed" ]; then
+              echo "<video src=\"$embed\" controls width=\"640\"></video>"
+              echo ""
+              echo "_Video not playing? [Open the run]($run) and download the \`proof-video\` artifact._"
             else
-              echo "⚠️ No proof video was produced."
+              echo "⚠️ No proof video was produced. [See the run]($run)."
             fi
           } > body.md
-          gh pr comment "${{ github.event.pull_request.number }}" --body-file body.md
+          gh pr comment "$pr" --body-file body.md
