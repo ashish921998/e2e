@@ -1,0 +1,28 @@
+src/components/proof/proof-bundle.css
+  s_68775a94af098d::t_7f5051cdaded82 50-53
+  s_68775a94af098d::t_f736b53292225e 44-45
+  s_68775a94af098d::t_5b0386019c080f 35-37
+  s_68775a94af098d::t_f85df1cf16512e 49
+  s_68775a94af098d::t_f68e3f8fafaa06 62-64
+  s_68775a94af098d::t_7f28b1f59b954d 18
+  s_68775a94af098d::t_57d4cf87017269 24-28
+  s_68775a94af098d::t_e12aa813ed0783 2-6,8-9,11
+src/styles.css
+  s_68775a94af098d::t_1ccfd69c9d5483 41-43,46-48,50-58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "9c4404c9f126bda5208f7958c909b3d37c34ea9d",
+  "prompts": {},
+  "sessions": {
+    "s_68775a94af098d": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_07cf424b3ffeLO30pt4N728Zok",
+        "model": "deepseek-v4-flash-free"
+      },
+      "human_author": "Ashish Huddar <ashish.hudar@gmail.com>"
+    }
+  }
+}
