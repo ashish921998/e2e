@@ -91,6 +91,22 @@ test("redact strips a malformed/unterminated quoted credential (no closing quote
   expect(output).toContain("[REDACTED]");
 });
 
+test("redact strips a single-quoted shell value with spaces (no word-boundary leak)", () => {
+  const secret = ["hun", " ", "ter", " ", "2"].join("");
+  const output = redact(`$ password='${secret}' && echo done`);
+  expect(output).not.toContain(secret);
+  expect(output).not.toContain("ter 2"); // nothing after the first word leaks
+  expect(output).toContain("[REDACTED]");
+  expect(output).toContain("echo done"); // trailing command survives
+});
+
+test("redact strips a double-quoted bearer token after the word Bearer", () => {
+  const jwt = ["eyJ", "abc", ".", "def", ".", "ghi"].join("");
+  const output = redact(`curl -H 'authorization: Bearer "${jwt}"'`);
+  expect(output).not.toContain(jwt);
+  expect(output).toContain("[REDACTED]");
+});
+
 test("redact leaves a transcript with no secrets unchanged", () => {
   const input = "$ rg stockRemaining src\nsrc/demo-product.ts: stockRemaining: 3";
   expect(redact(input)).toBe(input);

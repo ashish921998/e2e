@@ -32,10 +32,19 @@ export function redact(value: string): string {
       /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*")(?:\\.|[^"\\\n])*(?:"|$)/gim,
       '$1[REDACTED]"',
     )
-    // Unquoted value: stop at the first delimiter (incl. `&`) so a following
-    // field — e.g. a query-string `&status=ok` — survives.
+    // Single-quoted value: shell `password='hun ter2'` — no escape processing
+    // inside single quotes, so consume everything up to the closing `'`
+    // (spaces included) instead of stopping at the first word.
     .replace(
-      /((?:api[_-]?key|authorization|token|password)\s*[:=]\s*)(?:bearer\s+)?[^\s",;&]+/gi,
+      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*')[^'\n]*'/gi,
+      "$1[REDACTED]'",
+    )
+    // Unquoted value: stop at the first delimiter (incl. `&`) so a following
+    // field — e.g. a query-string `&status=ok` — survives. A lone opening quote
+    // after `Bearer` (`Bearer "token"`) is consumed so the token can't hide
+    // behind it.
+    .replace(
+      /((?:api[_-]?key|authorization|token|password)\s*[:=]\s*)(?:bearer\s+)?["']?[^\s",;&]+/gi,
       "$1[REDACTED]",
     )
     // Bare provider/runner keys. The boundary excludes `-`/`_` too, so a

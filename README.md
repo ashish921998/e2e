@@ -10,7 +10,7 @@
 
 Most "AI testing" tools stop at the agent saying "it looked fine." That claim is not evidence. `e2e-proof` splits the work in two:
 
-1. **Exploration** — a model uses a constrained tool set (`goto`, `click`, `fill`, `observe`, `bash`, `finish`) to exercise the change. This is creative and non-deterministic.
+1. **Exploration** — a model uses a constrained tool set (`goto`, `click`, `fill`, `observe_role`, `observe_text`, `bash`, `finish`) to exercise the change. This is creative and non-deterministic.
 2. **Replay** — every browser action the agent took is compiled into a real Playwright spec and re-run in a **fresh** browser context. Only this replay's assertions can produce a `passed` verdict.
 
 The exploration video shows the journey; the replay video is the proof.
