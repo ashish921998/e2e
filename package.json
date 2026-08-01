@@ -14,6 +14,8 @@
     "bin",
     "src/agent",
     "src/proof",
+    "!src/proof/runtime.ts",
+    "!src/proof/demo-bundle.ts",
     "action.yml",
     "README.md"
   ],

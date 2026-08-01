@@ -8,7 +8,7 @@
  * the actual verdict.
  */
 import { spawn } from "node:child_process";
-import { mkdir, writeFile, readdir } from "node:fs/promises";
+import { mkdir, writeFile, readdir, symlink } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { delimiter, dirname, join, relative } from "node:path";
 import {
@@ -90,10 +90,19 @@ async function executePlaywright(input: ExecuteInput): Promise<RunnerOutcome> {
     "utf8",
   );
   const playwright = playwrightCommand();
-  // The generated config + spec live in the run dir (often the consumer's
-  // workspace, which has no node_modules) yet import "@playwright/test".
-  // NODE_PATH points their resolution back at OUR install. A caller-supplied
-  // NODE_PATH (input.env) is appended, not allowed to replace it.
+  // The generated config + spec live in the run dir (a tool-owned dir under the
+  // consumer's cwd, with no node_modules) yet import "@playwright/test". Point
+  // their resolution back at OUR install two ways, since Playwright may load
+  // them as either ESM or CJS:
+  //   1. A node_modules symlink — the only mechanism ESM `import` honours (Node
+  //      ignores NODE_PATH for ESM). Resolution walks up from the run dir.
+  //   2. NODE_PATH — the legacy CJS `require` path Playwright transpiles to.
+  // Best-effort: if the run dir already has a node_modules, or the symlink is
+  // unsupported, we still have NODE_PATH.
+  if (playwright.nodeModules) {
+    await symlink(playwright.nodeModules, join(input.runDir, "node_modules"), "junction").catch(() => {});
+  }
+  // A caller-supplied NODE_PATH (input.env) is appended, not allowed to replace ours.
   const nodePath = [playwright.nodeModules, process.env.NODE_PATH, input.env?.NODE_PATH]
     .filter(Boolean)
     .join(delimiter);
