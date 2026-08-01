@@ -76,6 +76,12 @@ test("redact stops an unquoted value at the delimiter, sparing the next field", 
   expect(output).toContain("other=keep");
 });
 
+test("redact stops an unquoted value at a query-string `&`, sparing the next param", () => {
+  const output = redact("token=ghp_secretvalue&status=ok");
+  expect(output).not.toContain("ghp_secretvalue");
+  expect(output).toContain("status=ok");
+});
+
 test("redact strips a malformed/unterminated quoted credential (no closing quote)", () => {
   // A truncated log line: the quoted value never closes. Use a `ghp_` token so
   // the bare-provider-key rule (sk-/e2b_ only) cannot mask a broken quoted path.
