@@ -44,13 +44,21 @@ export function redact(value: string): string {
     // Unquoted value: stop at the first delimiter (incl. `&`) so a following
     // field — e.g. a query-string `&status=ok` — survives. A lone opening quote
     // after `Bearer` (`Bearer "token"`) is consumed so the token can't hide
-    // behind it.
+    // behind it. The key quotes are optional too (`"password"=secret` — a
+    // double-quoted key with an unquoted value must still redact).
     .replace(
-      /((?:api[_-]?key|authorization|token|password)\s*[:=]\s*)(?:bearer\s+)?["']?[^\s",;&]+/gi,
+      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*)(?:bearer\s+)?["']?[^\s",;&]+/gi,
       "$1[REDACTED]",
     )
+    // curl/wget HTTP basic auth: `-u user:pass` / `--user user:pass`. Keep the
+    // username, redact the password after the colon. Case-sensitive and the
+    // colon is required, so `sort -u file`, `psql -U name` etc. are untouched.
+    .replace(/((?:-u|--user)[ =]+[^\s:"']+:)[^\s"']+/g, "$1[REDACTED]")
     // Bare provider/runner keys. The boundary excludes `-`/`_` too, so a
     // compound identifier like `feat-sk-release` or `task-e2b_smoke` is not a
     // false positive; only a standalone key (after whitespace/quote/start) matches.
-    .replace(/(?<![A-Za-z0-9_-])(?:sk-|e2b_)[A-Za-z0-9_-]+/g, "[REDACTED]");
+    // Dots are spanned only between key chars so a full OpenAI key
+    // (`sk-proj-<id>.<id>.<id>`) is stripped as one unit, without eating a
+    // trailing sentence period.
+    .replace(/(?<![A-Za-z0-9_-])(?:sk-|e2b_)[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*/g, "[REDACTED]");
 }

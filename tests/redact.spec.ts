@@ -115,6 +115,36 @@ test("redact strips a double-quoted bearer token after the word Bearer", () => {
   expect(output).toContain("[REDACTED]");
 });
 
+test("redact strips a double-quoted key with an unquoted value", () => {
+  const secret = ["ghp_", "rawvalue", "0123"].join("");
+  const output = redact(`set "token"=${secret}`);
+  expect(output).not.toContain(secret);
+  expect(output).toContain("[REDACTED]");
+});
+
+test("redact strips a dotted provider key (sk-proj-...) as one unit", () => {
+  const key = ["sk-proj-", "aaa", ".", "bbb", ".", "ccc"].join("");
+  const output = redact(`error: invalid api key ${key} rejected`);
+  expect(output).not.toContain(key);
+  expect(output).not.toContain("bbb"); // middle segment does not survive
+  expect(output).not.toContain("ccc"); // trailing segment does not survive
+  expect(output).toContain("[REDACTED]");
+  expect(output).toContain("rejected"); // following word intact
+});
+
+test("redact strips a curl basic-auth password after -u, keeping the username", () => {
+  const pass = ["s3", "cr3", "tpw"].join("");
+  const output = redact(`curl -u admin:${pass} https://api.example.com`);
+  expect(output).not.toContain(pass);
+  expect(output).toContain("admin:[REDACTED]"); // username preserved
+  expect(output).toContain("https://api.example.com"); // URL survives
+});
+
+test("redact leaves a `sort -u file` flag untouched (no colon, not basic auth)", () => {
+  const input = "$ sort -u names.txt && echo ok";
+  expect(redact(input)).toBe(input);
+});
+
 test("redact leaves a transcript with no secrets unchanged", () => {
   const input = "$ rg stockRemaining src\nsrc/demo-product.ts: stockRemaining: 3";
   expect(redact(input)).toBe(input);
