@@ -33,10 +33,12 @@ export function redact(value: string): string {
       '$1[REDACTED]"',
     )
     // Single-quoted value: shell `password='hun ter2'` — no escape processing
-    // inside single quotes, so consume everything up to the closing `'`
-    // (spaces included) instead of stopping at the first word.
+    // inside single quotes, so consume everything (spaces included) up to the
+    // closing `'` OR end of line (`m` flag), so a malformed/unterminated
+    // `password='hun ter2` still redacts the whole value instead of leaving the
+    // tail for the unquoted branch to expose word-by-word.
     .replace(
-      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*')[^'\n]*'/gi,
+      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*')[^'\n]*(?:'|$)/gim,
       "$1[REDACTED]'",
     )
     // Unquoted value: stop at the first delimiter (incl. `&`) so a following

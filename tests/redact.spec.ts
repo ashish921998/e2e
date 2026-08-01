@@ -100,6 +100,14 @@ test("redact strips a single-quoted shell value with spaces (no word-boundary le
   expect(output).toContain("echo done"); // trailing command survives
 });
 
+test("redact strips an unterminated single-quoted value (no closing quote)", () => {
+  const secret = ["hun", " ", "ter", "2"].join("");
+  const output = redact(`$ password='${secret}`);
+  expect(output).not.toContain(secret);
+  expect(output).not.toContain("ter2"); // tail does not leak to the unquoted branch
+  expect(output).toContain("[REDACTED]");
+});
+
 test("redact strips a double-quoted bearer token after the word Bearer", () => {
   const jwt = ["eyJ", "abc", ".", "def", ".", "ghi"].join("");
   const output = redact(`curl -H 'authorization: Bearer "${jwt}"'`);
