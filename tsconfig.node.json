@@ -13,5 +13,5 @@
     "strict": true,
     "types": ["node"]
   },
-  "include": ["vite.config.ts", "playwright.config.ts", "playwright.unit.config.ts", "server/**/*.ts", "src/proof/execute.ts", "src/agent/**/*.ts", "bin/**/*.ts", "bin/**/*.mjs", "tests/**/*.ts"]
+  "include": ["vite.config.ts", "playwright.config.ts", "playwright.unit.config.ts", "server/**/*.ts", "src/proof/execute.ts", "src/proof/spawn.ts", "src/agent/**/*.ts", "bin/**/*.ts", "bin/**/*.mjs", "tests/**/*.ts"]
 }
