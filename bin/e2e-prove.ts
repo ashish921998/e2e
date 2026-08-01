@@ -23,6 +23,7 @@ import { pickClient } from "../src/agent/model";
 import { runAgentLoop } from "../src/agent/loop";
 import { buildAgentVideo } from "../src/agent/video";
 import { deterministicPlanFromSession, normaliseBaseUrl } from "../src/proof/index";
+import { redact } from "../src/proof/redact";
 import { runProof } from "../src/proof/execute";
 import { decideVerdict } from "../src/proof/verdict";
 import type { ProofPlan, ProofStatus, ProofTarget } from "../src/proof/types";
@@ -40,7 +41,7 @@ if (args.help || !args.url) {
 
 main().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`[e2e-prove] error: ${message.replace(/sk-[A-Za-z0-9_-]+/g, "[REDACTED]")}\n`);
+  process.stderr.write(`[e2e-prove] error: ${redact(message)}\n`);
   process.exit(2);
 });
 

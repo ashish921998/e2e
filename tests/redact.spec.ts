@@ -30,6 +30,14 @@ test("redact strips common credential assignments from a transcript", () => {
   expect(output).toContain("echo build complete");
 });
 
+test("redact strips a bare provider key with no key= prefix", () => {
+  // A raw API key echoed by a curl/error body, with no surrounding `key=`.
+  const input = `error: invalid api key ${apiKeyValue} rejected`;
+  const output = redact(input);
+  expect(output).not.toContain(apiKeyValue);
+  expect(output).toContain("[REDACTED]");
+});
+
 test("redact leaves a transcript with no secrets unchanged", () => {
   const input = "$ rg stockRemaining src\nsrc/demo-product.ts: stockRemaining: 3";
   expect(redact(input)).toBe(input);

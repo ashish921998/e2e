@@ -7,10 +7,10 @@
  * `e2e-prove` CLI / agent use it to produce the deterministic replay that is
  * the actual verdict.
  */
-import { spawn } from "node:child_process";
 import { mkdir, writeFile, readdir, symlink } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { delimiter, dirname, join, relative } from "node:path";
+import { spawnCollect } from "./spawn";
 import {
   createProofBundle,
   renderPlaywrightTest,
@@ -101,11 +101,13 @@ async function executePlaywright(input: ExecuteInput): Promise<RunnerOutcome> {
     .join(delimiter);
   // Computed values are authoritative: spread caller env first so E2E_BASE_URL
   // and NODE_PATH can't be silently clobbered by input.env.
-  const result = await command(
+  const result = await spawnCollect(
     playwright.command,
     [...playwright.args, "test", "--config", configPath, "--output", input.artifactsDir],
-    input.cwd ?? process.cwd(),
-    { ...(input.env ?? {}), E2E_BASE_URL: input.target.baseUrl, ...(nodePath ? { NODE_PATH: nodePath } : {}) },
+    {
+      cwd: input.cwd ?? process.cwd(),
+      env: { ...(input.env ?? {}), E2E_BASE_URL: input.target.baseUrl, ...(nodePath ? { NODE_PATH: nodePath } : {}) },
+    },
   );
   const completedAt = new Date().toISOString();
   // Playwright's list reporter writes the failure block (including the
@@ -214,29 +216,4 @@ async function filesBelow(path: string): Promise<string[]> {
     children.map(async (entry) => (entry.isDirectory() ? filesBelow(join(path, entry.name)) : [join(path, entry.name)])),
   );
   return nested.flat();
-}
-
-function command(
-  commandName: string,
-  args: string[],
-  cwd: string,
-  extraEnv: Record<string, string>,
-): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  return new Promise((resolveResult) => {
-    const child = spawn(commandName, args, {
-      cwd,
-      env: { ...process.env, ...extraEnv },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("error", (error) => resolveResult({ exitCode: 1, stdout, stderr: error.message }));
-    child.on("close", (code) => resolveResult({ exitCode: code ?? 1, stdout, stderr }));
-  });
 }

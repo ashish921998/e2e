@@ -9,9 +9,9 @@
  * honest representation of what the agent saw at each step. If ffmpeg is absent,
  * we skip the video and the screenshots remain as evidence.
  */
-import { spawn } from "node:child_process";
 import { writeFile, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { spawnCollect } from "../proof/spawn";
 
 export interface VideoOptions {
   /** Map of label -> png, as collected by the loop. */
@@ -62,7 +62,7 @@ export async function buildAgentVideo(options: VideoOptions): Promise<{ ok: bool
     options.output,
   ];
 
-  const result = await run("ffmpeg", args);
+  const result = await spawnCollect("ffmpeg", args);
   await rm(framesDir, { recursive: true, force: true });
   if (result.exitCode !== 0) {
     log(`ffmpeg failed (exit ${result.exitCode}): ${result.stderr.slice(0, 300)}`);
@@ -71,26 +71,8 @@ export async function buildAgentVideo(options: VideoOptions): Promise<{ ok: bool
   return { ok: true };
 }
 
-/** Verify a binary is on PATH. */
+/** Verify a binary is on PATH. A missing binary resolves to exit 1 (not a throw). */
 export async function hasBinary(name: string): Promise<boolean> {
-  const result = await run(name, ["-version"]);
+  const result = await spawnCollect(name, ["-version"]);
   return result.exitCode === 0;
-}
-
-function run(command: string, args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    // A missing binary surfaces as an 'error' event (ENOENT); resolve as a
-    // non-zero exit so hasBinary returns false rather than rejecting.
-    child.on("error", (error) => resolve({ exitCode: 1, stdout, stderr: error.message }));
-    child.on("close", (code) => resolve({ exitCode: code ?? 1, stdout, stderr }));
-  });
 }

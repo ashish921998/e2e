@@ -22,6 +22,7 @@
  *   response.output = [ {type:"message"} | {type:"function_call", call_id, name, arguments} ]
  *   continue by appending prior output items + function_call_output items.
  */
+import { redact } from "../proof/redact";
 import type { ToolCall, ToolDescriptor } from "./tools";
 
 export type UserBlock =
@@ -314,8 +315,7 @@ function parseJsonArguments(value: string | undefined): Record<string, unknown> 
 
 async function safeText(response: Response): Promise<string> {
   try {
-    const text = await response.text();
-    return text.replace(/sk-[A-Za-z0-9_-]+/g, "[REDACTED]").slice(0, 500);
+    return redact(await response.text()).slice(0, 500);
   } catch {
     return "<no body>";
   }
