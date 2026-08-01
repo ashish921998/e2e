@@ -17,7 +17,9 @@ test("bash executor redacts a credential in the command line, not just output", 
     id: "s", title: "t", startedAt: new Date().toISOString(), targetId: "preview", events: [],
   };
   const terminal: string[] = [];
-  const secret = "sk-livesecret0123";
+  // No `sk-`/`e2b_` prefix on purpose: this exercises the Authorization
+  // key/value redaction path, not the catch-all bare-provider-key rule.
+  const secret = "livesecret0123";
 
   await executeTool(
     { id: "1", name: "bash", input: { command: `curl -H "Authorization: Bearer ${secret}" https://api` } },

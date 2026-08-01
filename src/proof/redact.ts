@@ -24,9 +24,12 @@ export function redact(value: string): string {
   return value
     // Quoted value: consume the whole string up to the real closing quote,
     // including spaces and escaped quotes (`\"`), so `{"token":"a\"b c"}` is
-    // fully redacted and an adjacent field stays intact.
+    // fully redacted and an adjacent field stays intact. The close is `(?:"|$)`
+    // so a malformed/truncated `token="secret` (no closing quote) still redacts,
+    // terminating at end of line (`m` flag) instead of leaking the value. The
+    // value class excludes newlines so an unterminated value stops at the line.
     .replace(
-      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*")(?:\\.|[^"\\])*"/gi,
+      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*")(?:\\.|[^"\\\n])*(?:"|$)/gim,
       '$1[REDACTED]"',
     )
     // Unquoted value: stop at the first delimiter so a following field survives.

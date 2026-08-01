@@ -4,7 +4,7 @@ description: >
   An agentic web tester for pull requests. Boots an isolated cloud sandbox
   (E2B: Chrome + a terminal), an LLM agent drives the real browser to verify
   your change, then a deterministic Playwright replay produces the verdict and
-  both the agent-exploration and replay videos are posted to the PR.
+  the replay video is posted to the PR (both videos are attached as artifacts).
   One workflow file + two secrets to install. Framework-agnostic.
 
 branding:

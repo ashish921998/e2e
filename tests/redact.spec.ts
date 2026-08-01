@@ -76,6 +76,15 @@ test("redact stops an unquoted value at the delimiter, sparing the next field", 
   expect(output).toContain("other=keep");
 });
 
+test("redact strips a malformed/unterminated quoted credential (no closing quote)", () => {
+  // A truncated log line: the quoted value never closes. Use a `ghp_` token so
+  // the bare-provider-key rule (sk-/e2b_ only) cannot mask a broken quoted path.
+  const leaked = ["ghp_", "trunc", "atedsecret"].join("");
+  const output = redact(`log: {"token":"${leaked}`);
+  expect(output).not.toContain(leaked);
+  expect(output).toContain("[REDACTED]");
+});
+
 test("redact leaves a transcript with no secrets unchanged", () => {
   const input = "$ rg stockRemaining src\nsrc/demo-product.ts: stockRemaining: 3";
   expect(redact(input)).toBe(input);

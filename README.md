@@ -1,6 +1,6 @@
 # e2e-proof
 
-**Agentic end-to-end testing for any web app.** An LLM agent drives a real browser to verify your change, then a deterministic Playwright replay produces the verdict. Both videos land on the pull request.
+**Agentic end-to-end testing for any web app.** An LLM agent drives a real browser to verify your change, then a deterministic Playwright replay produces the verdict. The replay video lands on the pull request (both videos are attached to the run as artifacts).
 
 > An agent's claim is not the proof — the independent replay is.
 

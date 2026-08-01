@@ -26,6 +26,11 @@ export function spawnCollect(
     });
     let stdout = "";
     let stderr = "";
+    // Decode as UTF-8 so a multi-byte char split across two chunks is not
+    // corrupted (Node's StringDecoder keeps state across chunks; raw
+    // Buffer→string coercion per chunk does not).
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
     });
