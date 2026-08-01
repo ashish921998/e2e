@@ -64,7 +64,12 @@ export async function runProof(input: RunProofInput): Promise<RunProofResult> {
   // walked by collectArtifacts (which would recurse the whole dependency tree)
   // nor reachable through the Vite artifact server, which serves any path under
   // the run dir and would otherwise traverse the link out of it.
-  await rm(join(input.runDir, "node_modules"), { recursive: true, force: true }).catch(() => {});
+  //
+  // Non-recursive on purpose: this unlinks only the symlink/junction we created.
+  // If linkPackageModules silently no-op'd because a REAL node_modules already
+  // occupied that path, a non-recursive rm fails harmlessly (caught) instead of
+  // recursively deleting the consumer's dependency tree.
+  await rm(join(input.runDir, "node_modules"), { force: true }).catch(() => {});
   const artifacts = await collectArtifacts(input.runDir);
   const bundle = createProofBundle({
     id: input.runDir.split("/").pop() ?? "proof",

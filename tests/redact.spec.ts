@@ -57,6 +57,25 @@ test("redact leaves a benign substring containing 'sk-' alone", () => {
   expect(redact(input)).toBe(input);
 });
 
+test("redact does not mangle compound identifiers with an sk-/e2b_ segment", () => {
+  const input = "branch feat-sk-release file task-e2b_smoke.ts flag use-sk-demo";
+  expect(redact(input)).toBe(input);
+});
+
+test("redact consumes a full quoted value with spaces and an escaped quote", () => {
+  // Literal value is: foo \"bar baz  (a space and a backslash-escaped quote).
+  const secret = 'foo \\"bar baz';
+  const output = redact(`{"password":"${secret}","keep":"me"}`);
+  expect(output).not.toContain("bar baz");
+  expect(output).toContain('"keep":"me"'); // adjacent field intact
+});
+
+test("redact stops an unquoted value at the delimiter, sparing the next field", () => {
+  const output = redact("token=ghp_secretvalue,other=keep");
+  expect(output).not.toContain("ghp_secretvalue");
+  expect(output).toContain("other=keep");
+});
+
 test("redact leaves a transcript with no secrets unchanged", () => {
   const input = "$ rg stockRemaining src\nsrc/demo-product.ts: stockRemaining: 3";
   expect(redact(input)).toBe(input);

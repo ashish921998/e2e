@@ -273,9 +273,12 @@ export async function executeTool(call: ToolCall, opts: ToolExecutorOptions): Pr
       // credential shapes BEFORE it goes anywhere — both the persisted
       // transcript AND the summary fed back to the model. A leaked
       // `Authorization: bearer …` from a curl must never reach the provider.
+      // The command line itself can carry a secret (e.g. `curl -H "Authorization:
+      // Bearer …"`), so redact it too — not just stdout/stderr.
+      const safeCommand = redact(command);
       const safeStdout = redact(stdout);
       const safeStderr = redact(stderr);
-      const line = `$ ${command}\n${safeStdout}${safeStderr ? `\n${safeStderr}` : ""}`;
+      const line = `$ ${safeCommand}\n${safeStdout}${safeStderr ? `\n${safeStderr}` : ""}`;
       terminal.push(line);
       const summary = `exit ${exitCode}, ${truncateForSummary(safeStdout)}${safeStderr ? ` / ${truncateForSummary(safeStderr)}` : ""}`;
       return { result: { ok: exitCode === 0, summary, ...(exitCode === 0 ? {} : { error: `non-zero exit ${exitCode}` }) } };

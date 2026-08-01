@@ -60,6 +60,7 @@ The exit code **is** the verdict, so CI gates on it directly.
 | `--provider`  | `openai` or `anthropic` (overrides key-based detection).      |
 | `--no-replay` | Exploration video + agent verdict only; skip the replay.      |
 | `--out`       | Output directory (default `proof-out/`).                      |
+| `--target-id` | Target id recorded in the bundle (default `preview`).         |
 
 The CLI resolves its **own** Playwright install for the replay — your repo never needs Playwright as a dependency. Install the browser binary once on the host: `npx playwright install chromium`.
 

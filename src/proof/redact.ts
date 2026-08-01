@@ -22,9 +22,20 @@
  */
 export function redact(value: string): string {
   return value
+    // Quoted value: consume the whole string up to the real closing quote,
+    // including spaces and escaped quotes (`\"`), so `{"token":"a\"b c"}` is
+    // fully redacted and an adjacent field stays intact.
     .replace(
-      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*"?)(?:bearer\s+)?[^\s",;]+/gi,
+      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*")(?:\\.|[^"\\])*"/gi,
+      '$1[REDACTED]"',
+    )
+    // Unquoted value: stop at the first delimiter so a following field survives.
+    .replace(
+      /((?:api[_-]?key|authorization|token|password)\s*[:=]\s*)(?:bearer\s+)?[^\s",;]+/gi,
       "$1[REDACTED]",
     )
-    .replace(/(?<![A-Za-z0-9])(?:sk-|e2b_)[A-Za-z0-9_-]+/g, "[REDACTED]");
+    // Bare provider/runner keys. The boundary excludes `-`/`_` too, so a
+    // compound identifier like `feat-sk-release` or `task-e2b_smoke` is not a
+    // false positive; only a standalone key (after whitespace/quote/start) matches.
+    .replace(/(?<![A-Za-z0-9_-])(?:sk-|e2b_)[A-Za-z0-9_-]+/g, "[REDACTED]");
 }
