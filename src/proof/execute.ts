@@ -92,13 +92,18 @@ async function executePlaywright(input: ExecuteInput): Promise<RunnerOutcome> {
   const playwright = playwrightCommand();
   // The generated config + spec live in the run dir (often the consumer's
   // workspace, which has no node_modules) yet import "@playwright/test".
-  // NODE_PATH points their resolution back at OUR install.
-  const nodePath = [playwright.nodeModules, process.env.NODE_PATH].filter(Boolean).join(delimiter);
+  // NODE_PATH points their resolution back at OUR install. A caller-supplied
+  // NODE_PATH (input.env) is appended, not allowed to replace it.
+  const nodePath = [playwright.nodeModules, process.env.NODE_PATH, input.env?.NODE_PATH]
+    .filter(Boolean)
+    .join(delimiter);
+  // Computed values are authoritative: spread caller env first so E2E_BASE_URL
+  // and NODE_PATH can't be silently clobbered by input.env.
   const result = await command(
     playwright.command,
     [...playwright.args, "test", "--config", configPath, "--output", input.artifactsDir],
     input.cwd ?? process.cwd(),
-    { E2E_BASE_URL: input.target.baseUrl, ...(nodePath ? { NODE_PATH: nodePath } : {}), ...(input.env ?? {}) },
+    { ...(input.env ?? {}), E2E_BASE_URL: input.target.baseUrl, ...(nodePath ? { NODE_PATH: nodePath } : {}) },
   );
   const completedAt = new Date().toISOString();
   // Playwright's list reporter writes the failure block (including the

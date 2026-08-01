@@ -80,7 +80,7 @@ Action inputs (see [`action.yml`](action.yml) for the canonical list):
 
 ## How it works
 
-```
+```text
 PR → action → startSandbox(E2B) → agent loop (model + tools) → RecordedSession
             → deterministicPlanFromSession → runProof (fresh Playwright, video:on) → verdict + videos → PR comment
 ```
@@ -91,7 +91,7 @@ PR → action → startSandbox(E2B) → agent loop (model + tools) → RecordedS
 4. `renderPlaywrightTest` turns the plan into a real Playwright spec.
 5. `runProof` replays that spec once in a **fresh** browser with `video: "on"`. Only this replay's assertions can return `passed`.
 
-Because the replay uses `getByRole(...)` locators (robust to CSS/class churn) and a constrained action schema, the proof is deterministic and resistant to incidental UI changes — it fails only when the behavior you asked about actually changed.
+Because the replay uses `getByRole(...)` locators (robust to CSS/class churn) and a constrained action schema, the proof resists incidental UI changes — it fails on genuine behavior changes, not styling noise. Browser, network, timing, or target-availability problems can still surface as failures; the goal is that a red verdict reflects a real behavioral difference rather than a brittle selector.
 
 ### Why a sandbox
 
@@ -110,6 +110,7 @@ The E2B sandbox is the "give the agent a computer" layer: an isolated cloud VM w
 ```sh
 git clone <this-repo>
 npm ci
+npm run playwright:install        # install this package's pinned Chromium for the replay
 npm run typecheck                 # tsc -b across src/, bin/, tests/
 npm run test:unit                 # pure-logic specs — no sandbox, no browser, no keys
 node bin/e2e-prove.mjs --help     # launcher smoke

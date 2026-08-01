@@ -30,6 +30,7 @@
     "proof:rehearse": "node scripts/reliability.mjs",
     "proof:export": "node scripts/export-proof.mjs",
     "prove": "node bin/e2e-prove.mjs",
+    "playwright:install": "playwright install chromium",
     "typecheck": "tsc -b"
   },
   "dependencies": {

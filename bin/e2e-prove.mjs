@@ -24,8 +24,9 @@ const argv = process.argv.slice(2);
 // can't be killed cleanly mid-stall under some stdio setups.
 //
 // The watchdog guards ONLY the loader cold start, never the run itself: the
-// CLI prints a startup line to stderr the moment it loads, and the first
-// stderr byte disarms the timer. A legitimate run can then take as long as
+// CLI prints the exact marker "[e2e-prove] cli loaded\n" to stderr the moment
+// it loads, and only that marker disarms the timer (not the first byte, which
+// could be an early diagnostic). A legitimate run can then take as long as
 // the agent needs.
 async function runWithWatchdog(attempt) {
   return new Promise((resolve) => {
@@ -43,9 +44,20 @@ async function runWithWatchdog(attempt) {
         watchdog = undefined;
       }
     };
+    // Disarm only on the exact readiness marker, not the first stderr byte:
+    // early diagnostics or tsx module output would otherwise false-disarm and
+    // leave a real cold-start stall undetected. Chunks are forwarded
+    // immediately and buffered across boundaries until the marker appears.
+    const MARKER = "[e2e-prove] cli loaded\n";
+    let stderrBuf = "";
     child.stderr.on("data", (chunk) => {
-      disarm();
       process.stderr.write(chunk);
+      if (watchdog) {
+        stderrBuf += chunk.toString();
+        if (stderrBuf.includes(MARKER)) disarm();
+        // Bound the buffer so a pathological producer can't grow it forever.
+        if (stderrBuf.length > 8192) stderrBuf = stderrBuf.slice(-4096);
+      }
     });
     child.on("error", () => {
       disarm();
