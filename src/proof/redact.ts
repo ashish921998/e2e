@@ -7,17 +7,24 @@
  * stripped. (A previous implementation evaluated the replacement against the
  * literal string "$&" and returned the input unchanged.)
  *
- * Two shapes are covered: prefixed assignments (`api-key: …`, `token=…`) and
- * bare provider keys (`sk-…`) that appear with no surrounding key name — e.g. a
- * raw API key echoed in a curl or an error body. This is the single definition
- * of "secret" for the whole engine; call it everywhere evidence or error text
- * may reach disk or a model provider.
+ * Two shapes are covered:
+ *   1. Key/value assignments — `api-key: …`, `token=…`, and the quoted JSON
+ *      form `{"authorization":"Bearer …"}` (the closing/opening quotes around
+ *      the key and value are optional in the pattern).
+ *   2. Bare provider/runner keys — `sk-…` (model providers) and `e2b_…` (the
+ *      sandbox runner's required credential) that appear with no surrounding
+ *      key name, e.g. echoed raw in a curl or an error body. A token boundary
+ *      is required before the prefix so a benign substring like `ask-me` is not
+ *      mistaken for a key.
+ *
+ * This is the single definition of "secret" for the whole engine; call it
+ * everywhere evidence or error text may reach disk or a model provider.
  */
 export function redact(value: string): string {
   return value
     .replace(
-      /((?:api[_-]?key|authorization|token|password)\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+/gi,
+      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*"?)(?:bearer\s+)?[^\s",;]+/gi,
       "$1[REDACTED]",
     )
-    .replace(/sk-[A-Za-z0-9_-]{8,}/g, "[REDACTED]");
+    .replace(/(?<![A-Za-z0-9])(?:sk-|e2b_)[A-Za-z0-9_-]+/g, "[REDACTED]");
 }

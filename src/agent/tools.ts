@@ -30,7 +30,7 @@ type AriaRole = Parameters<Page["getByRole"]>[0];
 const ARIA_ROLES = new Set<string>([
   "alert", "alertdialog", "application", "article", "banner", "blockquote", "button",
   "caption", "cell", "checkbox", "code", "columnheader", "combobox", "complementary",
-  "contentinfo", "definition", "deletion", "dialog", "document", "emphasis", "feed",
+  "contentinfo", "definition", "deletion", "dialog", "directory", "document", "emphasis", "feed",
   "figure", "form", "generic", "grid", "gridcell", "group", "heading", "img",
   "insertion", "link", "list", "listbox", "listitem", "log", "main", "marquee",
   "math", "meter", "menu", "menubar", "menuitem", "menuitemcheckbox", "menuitemradio",

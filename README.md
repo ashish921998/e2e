@@ -69,7 +69,7 @@ Action inputs (see [`action.yml`](action.yml) for the canonical list):
 
 | Input          | Default | Description                                                                 |
 | -------------- | ------- | --------------------------------------------------------------------------- |
-| `goal`         | —       | What the agent should verify, in plain language.                            |
+| `goal`         | `Verify the changed feature works against the running app.` | What the agent should verify, in plain language. |
 | `base-url`     | —       | Explicit URL to test; overrides auto-detection.                             |
 | `preview-url`  | —       | Fallback URL when neither `base-url` nor a deployment event is available.   |
 | `max-steps`    | `25`    | Agent step cap.                                                             |

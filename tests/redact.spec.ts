@@ -38,6 +38,25 @@ test("redact strips a bare provider key with no key= prefix", () => {
   expect(output).toContain("[REDACTED]");
 });
 
+test("redact strips a bare E2B runner credential", () => {
+  const e2bValue = ["e2b_", "abcdef", "012345"].join("");
+  const output = redact(`E2B sandbox rejected: ${e2bValue}`);
+  expect(output).not.toContain(e2bValue);
+  expect(output).toContain("[REDACTED]");
+});
+
+test("redact strips credentials inside quoted JSON, even non-sk tokens", () => {
+  const jwt = ["eyJ", "header", ".", "payload", ".", "sig"].join("");
+  const output = redact(`response: {"authorization":"Bearer ${jwt}","ok":true}`);
+  expect(output).not.toContain(jwt);
+  expect(output).toContain("ok"); // non-secret fields survive
+});
+
+test("redact leaves a benign substring containing 'sk-' alone", () => {
+  const input = "please ask-questions before you commit";
+  expect(redact(input)).toBe(input);
+});
+
 test("redact leaves a transcript with no secrets unchanged", () => {
   const input = "$ rg stockRemaining src\nsrc/demo-product.ts: stockRemaining: 3";
   expect(redact(input)).toBe(input);

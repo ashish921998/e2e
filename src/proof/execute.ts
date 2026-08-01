@@ -7,7 +7,7 @@
  * `e2e-prove` CLI / agent use it to produce the deterministic replay that is
  * the actual verdict.
  */
-import { mkdir, writeFile, readdir, symlink } from "node:fs/promises";
+import { mkdir, writeFile, readdir, rm, symlink } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { delimiter, dirname, join, relative } from "node:path";
 import { spawnCollect } from "./spawn";
@@ -60,6 +60,11 @@ export async function runProof(input: RunProofInput): Promise<RunProofResult> {
     cwd: input.cwd,
     env: input.env,
   });
+  // Drop the resolution junction now Playwright has exited: it must not be
+  // walked by collectArtifacts (which would recurse the whole dependency tree)
+  // nor reachable through the Vite artifact server, which serves any path under
+  // the run dir and would otherwise traverse the link out of it.
+  await rm(join(input.runDir, "node_modules"), { recursive: true, force: true }).catch(() => {});
   const artifacts = await collectArtifacts(input.runDir);
   const bundle = createProofBundle({
     id: input.runDir.split("/").pop() ?? "proof",
@@ -90,6 +95,11 @@ async function executePlaywright(input: ExecuteInput): Promise<RunnerOutcome> {
     "utf8",
   );
   const playwright = playwrightCommand();
+  if (!playwright.nodeModules) {
+    // The packaged Playwright CLI was unresolvable; we fell back to `npx`, which
+    // means no symlink/NODE_PATH resolution and possibly a different version.
+    process.stderr.write("[proof] warning: packaged Playwright not resolvable; falling back to `npx playwright` (replay may use a different version).\n");
+  }
   // The generated config + spec live in the run dir (a tool-owned dir under the
   // consumer's cwd, with no node_modules) yet import "@playwright/test". Point
   // their resolution back at OUR install two ways, since Playwright may load
