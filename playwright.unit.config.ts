@@ -5,7 +5,10 @@ import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: "./tests",
   // The one spec that needs a live target; everything else in tests/ is pure.
-  testIgnore: "low-stock.spec.ts",
+  // Denylist (not allowlist) on purpose: a new live spec fails CI loudly here,
+  // whereas an allowlist would silently drop a forgotten pure spec. Leading
+  // **/ so the glob matches the absolute test path.
+  testIgnore: "**/low-stock.spec.ts",
   fullyParallel: false,
   workers: 1,
   reporter: [["list"]],

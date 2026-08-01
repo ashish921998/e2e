@@ -93,17 +93,10 @@ async function executePlaywright(input: ExecuteInput): Promise<RunnerOutcome> {
   // The generated config + spec live in the run dir (a tool-owned dir under the
   // consumer's cwd, with no node_modules) yet import "@playwright/test". Point
   // their resolution back at OUR install two ways, since Playwright may load
-  // them as either ESM or CJS:
-  //   1. A node_modules symlink — the only mechanism ESM `import` honours (Node
-  //      ignores NODE_PATH for ESM). Resolution walks up from the run dir.
-  //   2. NODE_PATH — the legacy CJS `require` path Playwright transpiles to.
-  // Best-effort: if the run dir already has a node_modules, or the symlink is
-  // unsupported, we still have NODE_PATH.
-  if (playwright.nodeModules) {
-    await symlink(playwright.nodeModules, join(input.runDir, "node_modules"), "junction").catch(() => {});
-  }
+  // them as either ESM (symlink) or CJS (NODE_PATH). See linkPackageModules.
+  const nodeModules = await linkPackageModules(input.runDir);
   // A caller-supplied NODE_PATH (input.env) is appended, not allowed to replace ours.
-  const nodePath = [playwright.nodeModules, process.env.NODE_PATH, input.env?.NODE_PATH]
+  const nodePath = [nodeModules, process.env.NODE_PATH, input.env?.NODE_PATH]
     .filter(Boolean)
     .join(delimiter);
   // Computed values are authoritative: spread caller env first so E2E_BASE_URL
@@ -155,6 +148,27 @@ function playwrightCommand(): { command: string; args: string[]; nodeModules?: s
   } catch {
     return { command: process.platform === "win32" ? "npx.cmd" : "npx", args: ["playwright"] };
   }
+}
+
+/** Resolve THIS package's node_modules dir (where @playwright/test lives), or undefined. */
+export function packageNodeModules(): string | undefined {
+  return playwrightCommand().nodeModules;
+}
+
+/**
+ * Link this package's node_modules into the run dir so the generated ESM
+ * config/spec can resolve "@playwright/test" — Node ignores NODE_PATH for ESM
+ * `import`, so a symlink it walks up from the run dir is the mechanism that
+ * works. Returns the linked path so the caller can also mirror it onto
+ * NODE_PATH for the CJS load path. Best-effort: a pre-existing node_modules or
+ * an unsupported symlink is swallowed.
+ */
+export async function linkPackageModules(runDir: string): Promise<string | undefined> {
+  const nodeModules = packageNodeModules();
+  if (nodeModules) {
+    await symlink(nodeModules, join(runDir, "node_modules"), "junction").catch(() => {});
+  }
+  return nodeModules;
 }
 
 /** A missing browser binary or a Playwright install failure is a runner problem, not a product failure. */
