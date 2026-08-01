@@ -145,6 +145,33 @@ test("redact leaves a `sort -u file` flag untouched (no colon, not basic auth)",
   expect(redact(input)).toBe(input);
 });
 
+test("redact strips the base64 credential of an HTTP Basic authorization header", () => {
+  const b64 = ["dXNlcjpw", "YXNzd29y", "ZA"].join(""); // base64("user:password")-ish
+  const output = redact(`authorization: Basic ${b64}`);
+  expect(output).not.toContain(b64);
+  expect(output).toContain("[REDACTED]");
+});
+
+test("redact strips a shell-quoted curl -u password, keeping the username", () => {
+  const pass = ["s3", "cr3", "tpw"].join("");
+  const output = redact(`curl -u "admin:${pass}" https://api.example.com`);
+  expect(output).not.toContain(pass);
+  expect(output).toContain("admin:"); // username survives
+  expect(output).toContain("https://api.example.com"); // URL survives
+});
+
+test("redact strips an attached curl -u password (`-uuser:pass`)", () => {
+  const pass = ["hunter", "2000"].join("");
+  const output = redact(`curl -uadmin:${pass} https://api.example.com`);
+  expect(output).not.toContain(pass);
+  expect(output).toContain("[REDACTED]");
+});
+
+test("redact leaves a mid-word `-u` (e.g. `chown foo-user:group`) untouched", () => {
+  const input = "$ chown foo-user:group /srv/app";
+  expect(redact(input)).toBe(input);
+});
+
 test("redact leaves a transcript with no secrets unchanged", () => {
   const input = "$ rg stockRemaining src\nsrc/demo-product.ts: stockRemaining: 3";
   expect(redact(input)).toBe(input);

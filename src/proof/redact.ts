@@ -43,17 +43,25 @@ export function redact(value: string): string {
     )
     // Unquoted value: stop at the first delimiter (incl. `&`) so a following
     // field — e.g. a query-string `&status=ok` — survives. A lone opening quote
-    // after `Bearer` (`Bearer "token"`) is consumed so the token can't hide
-    // behind it. The key quotes are optional too (`"password"=secret` — a
-    // double-quoted key with an unquoted value must still redact).
+    // after the scheme (`Bearer "token"`) is consumed so the token can't hide
+    // behind it. `basic` is matched alongside `bearer` so the base64 credential
+    // of `authorization: Basic <b64>` is consumed, not left behind the scheme.
+    // The key quotes are optional too (`"password"=secret` — a double-quoted key
+    // with an unquoted value must still redact).
     .replace(
-      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*)(?:bearer\s+)?["']?[^\s",;&]+/gi,
+      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*)(?:(?:bearer|basic)\s+)?["']?[^\s",;&]+/gi,
       "$1[REDACTED]",
     )
-    // curl/wget HTTP basic auth: `-u user:pass` / `--user user:pass`. Keep the
-    // username, redact the password after the colon. Case-sensitive and the
-    // colon is required, so `sort -u file`, `psql -U name` etc. are untouched.
-    .replace(/((?:-u|--user)[ =]+[^\s:"']+:)[^\s"']+/g, "$1[REDACTED]")
+    // curl/wget HTTP basic auth: `-u user:pass` / `--user user:pass`, including
+    // the attached (`-uuser:pass`) and shell-quoted (`-u "user:pass"`) forms.
+    // Keep the username, redact the password after the colon. A word boundary
+    // (`(?<=^|\s)`) is required before the flag so `chown foo-user:group` and
+    // `sort -u file` are untouched; the colon is mandatory so a bare `-u` flag
+    // never matches.
+    .replace(
+      /(?<=^|\s)((?:-u|--user)(?:[ =]+|(?=\S))["']?[^\s:"']+:)[^\s"']+/g,
+      "$1[REDACTED]",
+    )
     // Bare provider/runner keys. The boundary excludes `-`/`_` too, so a
     // compound identifier like `feat-sk-release` or `task-e2b_smoke` is not a
     // false positive; only a standalone key (after whitespace/quote/start) matches.

@@ -13,5 +13,6 @@
     "strict": true,
     "types": ["node"]
   },
-  "include": ["vite.config.ts", "playwright.config.ts", "playwright.unit.config.ts", "server/**/*.ts", "src/proof/execute.ts", "src/proof/spawn.ts", "src/agent/**/*.ts", "bin/**/*.ts", "bin/**/*.mjs", "tests/**/*.ts"]
+  "//": "bin/e2e-prove.mjs (the shipped launcher: watchdog + retry) is intentionally plain JS, not typechecked — allowJs is off here, so no *.mjs glob.",
+  "include": ["vite.config.ts", "playwright.config.ts", "playwright.unit.config.ts", "server/**/*.ts", "src/proof/execute.ts", "src/proof/spawn.ts", "src/agent/**/*.ts", "bin/**/*.ts", "tests/**/*.ts"]
 }

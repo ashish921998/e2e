@@ -7,7 +7,7 @@
  * `e2e-prove` CLI / agent use it to produce the deterministic replay that is
  * the actual verdict.
  */
-import { mkdir, writeFile, readdir, rm, symlink } from "node:fs/promises";
+import { mkdir, writeFile, readdir, lstat, unlink, symlink } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { delimiter, dirname, join, relative } from "node:path";
 import { spawnCollect } from "./spawn";
@@ -60,16 +60,23 @@ export async function runProof(input: RunProofInput): Promise<RunProofResult> {
     cwd: input.cwd,
     env: input.env,
   });
-  // Drop the resolution junction now Playwright has exited: it must not be
+  // Drop the resolution symlink now Playwright has exited: it must not be
   // walked by collectArtifacts (which would recurse the whole dependency tree)
   // nor reachable through the Vite artifact server, which serves any path under
   // the run dir and would otherwise traverse the link out of it.
   //
-  // Non-recursive on purpose: this unlinks only the symlink/junction we created.
-  // If linkPackageModules silently no-op'd because a REAL node_modules already
-  // occupied that path, a non-recursive rm fails harmlessly (caught) instead of
-  // recursively deleting the consumer's dependency tree.
-  await rm(join(input.runDir, "node_modules"), { force: true }).catch(() => {});
+  // Remove it ONLY if it is actually a symlink — the one linkPackageModules
+  // created. If a REAL node_modules already occupied that path (linkPackageModules
+  // no-op'd on EEXIST), lstat reports a directory and we leave it untouched
+  // rather than deleting the consumer's dependency tree. A failed unlink is
+  // surfaced to stderr instead of silently leaving the link to be walked.
+  const linkPath = join(input.runDir, "node_modules");
+  const linkStat = await lstat(linkPath).catch(() => null);
+  if (linkStat?.isSymbolicLink()) {
+    await unlink(linkPath).catch((error) => {
+      process.stderr.write(`[proof] warning: could not remove resolution symlink ${linkPath}: ${String(error)}\n`);
+    });
+  }
   const artifacts = await collectArtifacts(input.runDir);
   const bundle = createProofBundle({
     id: input.runDir.split("/").pop() ?? "proof",
