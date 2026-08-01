@@ -58,7 +58,7 @@ The exit code **is** the verdict, so CI gates on it directly.
 | `--max-steps` | Agent step cap (default 25).                                  |
 | `--model`     | Explicit model id for the provider.                           |
 | `--provider`  | `openai` or `anthropic` (overrides key-based detection).      |
-| `--no-replay` | Exploration video + agent verdict only; skip the replay.      |
+| `--no-replay` | Exploration video + agent verdict only; skips the replay. The verdict gate needs the replay, so such a run never `passed` (exits `2`). |
 | `--out`       | Output directory (default `proof-out/`).                      |
 | `--target-id` | Target id recorded in the bundle (default `preview`).         |
 
