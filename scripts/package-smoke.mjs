@@ -8,7 +8,7 @@ const tempDir = await mkdtemp(join(tmpdir(), "e2e-prove-package-"));
 
 try {
   const pack = run("npm", ["pack", "--json", "--pack-destination", tempDir], root);
-  const [manifest] = JSON.parse(pack.stdout);
+  const [manifest] = parseTrailingJsonArray(pack.stdout);
   if (!manifest?.filename || !Array.isArray(manifest.files)) {
     throw new Error("npm pack did not return a package manifest");
   }
@@ -31,6 +31,18 @@ try {
   process.stdout.write(`package smoke passed (${manifest.files.length} files)\n`);
 } finally {
   await rm(tempDir, { recursive: true, force: true });
+}
+
+function parseTrailingJsonArray(output) {
+  for (let index = output.lastIndexOf("["); index >= 0; index = output.lastIndexOf("[", index - 1)) {
+    try {
+      const parsed = JSON.parse(output.slice(index));
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      // Lifecycle output may precede npm's final JSON payload.
+    }
+  }
+  throw new Error(`npm pack did not emit valid JSON:\n${output}`);
 }
 
 function run(command, args, cwd) {
