@@ -22,21 +22,49 @@ const argv = process.argv.slice(2);
 
 // spawn (async) + a watchdog so we can detect a stall and retry. spawnSync
 // can't be killed cleanly mid-stall under some stdio setups.
+//
+// The watchdog guards ONLY the loader cold start, never the run itself: the
+// CLI prints the exact marker "[e2e-prove] cli loaded\n" to stderr the moment
+// it loads, and only that marker disarms the timer (not the first byte, which
+// could be an early diagnostic). A legitimate run can then take as long as
+// the agent needs.
 async function runWithWatchdog(attempt) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [tsxCli, entry, ...argv], { stdio: "inherit" });
-    // tsx cold-start should be well under 20s; if it hasn't exited by then,
-    // treat it as stalled, kill, and let the caller retry.
-    const watchdog = setTimeout(() => {
+    const child = spawn(process.execPath, [tsxCli, entry, ...argv], {
+      stdio: ["inherit", "inherit", "pipe"],
+    });
+    let watchdog = setTimeout(() => {
+      watchdog = undefined;
       child.kill("SIGKILL");
       resolve({ stalled: true, code: null });
     }, attempt === 1 ? 45_000 : 60_000);
+    const disarm = () => {
+      if (watchdog) {
+        clearTimeout(watchdog);
+        watchdog = undefined;
+      }
+    };
+    // Disarm only on the exact readiness marker, not the first stderr byte:
+    // early diagnostics or tsx module output would otherwise false-disarm and
+    // leave a real cold-start stall undetected. Chunks are forwarded
+    // immediately and buffered across boundaries until the marker appears.
+    const MARKER = "[e2e-prove] cli loaded\n";
+    let stderrBuf = "";
+    child.stderr.on("data", (chunk) => {
+      process.stderr.write(chunk);
+      if (watchdog) {
+        stderrBuf += chunk.toString();
+        if (stderrBuf.includes(MARKER)) disarm();
+        // Bound the buffer so a pathological producer can't grow it forever.
+        if (stderrBuf.length > 8192) stderrBuf = stderrBuf.slice(-4096);
+      }
+    });
     child.on("error", () => {
-      clearTimeout(watchdog);
+      disarm();
       resolve({ stalled: false, code: 127 });
     });
     child.on("exit", (code) => {
-      clearTimeout(watchdog);
+      disarm();
       resolve({ stalled: false, code: code ?? 1 });
     });
   });

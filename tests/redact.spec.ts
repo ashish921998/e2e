@@ -30,6 +30,198 @@ test("redact strips common credential assignments from a transcript", () => {
   expect(output).toContain("echo build complete");
 });
 
+test("redact strips a bare provider key with no key= prefix", () => {
+  // A raw API key echoed by a curl/error body, with no surrounding `key=`.
+  const input = `error: invalid api key ${apiKeyValue} rejected`;
+  const output = redact(input);
+  expect(output).not.toContain(apiKeyValue);
+  expect(output).toContain("[REDACTED]");
+});
+
+test("redact strips a bare E2B runner credential", () => {
+  const e2bValue = ["e2b_", "abcdef", "012345"].join("");
+  const output = redact(`E2B sandbox rejected: ${e2bValue}`);
+  expect(output).not.toContain(e2bValue);
+  expect(output).toContain("[REDACTED]");
+});
+
+test("redact strips credentials inside quoted JSON, even non-sk tokens", () => {
+  const jwt = ["eyJ", "header", ".", "payload", ".", "sig"].join("");
+  const output = redact(`response: {"authorization":"Bearer ${jwt}","ok":true}`);
+  expect(output).not.toContain(jwt);
+  expect(output).toBe('response: {"authorization":"[REDACTED]","ok":true}');
+});
+
+test("redact preserves assignment quote delimiters without reprocessing replacements", () => {
+  expect(redact(`authorization="${passwordValue}"`)).toBe('authorization="[REDACTED]"');
+  expect(redact(`authorization='${passwordValue}'`)).toBe("authorization='[REDACTED]'");
+});
+
+test("redact consumes quotes around Bearer and Basic credentials", () => {
+  expect(redact(`authorization=Bearer "${bearerValue}"`)).toBe("authorization=[REDACTED]");
+  expect(redact(`authorization=Basic '${bearerValue}'`)).toBe("authorization=[REDACTED]");
+  expect(redact(`authorization=Bearer"${bearerValue}"`)).toBe("authorization=[REDACTED]");
+  expect(redact(`authorization=Basic'${bearerValue}'`)).toBe("authorization=[REDACTED]");
+});
+
+test("redact leaves a benign substring containing 'sk-' alone", () => {
+  const input = "please ask-questions before you commit";
+  expect(redact(input)).toBe(input);
+});
+
+test("redact does not mangle compound identifiers with an sk-/e2b_ segment", () => {
+  const input = "branch feat-sk-release file task-e2b_smoke.ts flag use-sk-demo";
+  expect(redact(input)).toBe(input);
+});
+
+test("redact consumes a full quoted value with spaces and an escaped quote", () => {
+  // Literal value is: foo \"bar baz  (a space and a backslash-escaped quote).
+  const secret = 'foo \\"bar baz';
+  const output = redact(`{"password":"${secret}","keep":"me"}`);
+  expect(output).not.toContain("bar baz");
+  expect(output).toContain('"keep":"me"'); // adjacent field intact
+});
+
+test("redact stops an unquoted value at the delimiter, sparing the next field", () => {
+  const output = redact("token=ghp_secretvalue,other=keep");
+  expect(output).not.toContain("ghp_secretvalue");
+  expect(output).toContain("other=keep");
+});
+
+test("redact stops an unquoted value at a query-string `&`, sparing the next param", () => {
+  const output = redact("token=ghp_secretvalue&status=ok");
+  expect(output).not.toContain("ghp_secretvalue");
+  expect(output).toContain("status=ok");
+});
+
+test("redact strips a malformed/unterminated quoted credential (no closing quote)", () => {
+  // A truncated log line: the quoted value never closes. Use a `ghp_` token so
+  // the bare-provider-key rule (sk-/e2b_ only) cannot mask a broken quoted path.
+  const leaked = ["ghp_", "trunc", "atedsecret"].join("");
+  const output = redact(`log: {"token":"${leaked}`);
+  expect(output).not.toContain(leaked);
+  expect(output).toContain("[REDACTED]");
+});
+
+test("redact strips multiline quoted credentials through the closing quote", () => {
+  const secretTail = ["second", "-line", "-secret"].join("");
+  const doubleQuoted = redact(`password="first line\n${secretTail}"\nstatus=ok`);
+  const singleQuoted = redact(`token='first line\n${secretTail}'\nstatus=ok`);
+
+  expect(doubleQuoted).not.toContain(secretTail);
+  expect(singleQuoted).not.toContain(secretTail);
+  expect(doubleQuoted).toContain("status=ok");
+  expect(singleQuoted).toContain("status=ok");
+});
+
+test("redact strips a single-quoted shell value with spaces (no word-boundary leak)", () => {
+  const secret = ["hun", " ", "ter", " ", "2"].join("");
+  const output = redact(`$ password='${secret}' && echo done`);
+  expect(output).not.toContain(secret);
+  expect(output).not.toContain("ter 2"); // nothing after the first word leaks
+  expect(output).toContain("[REDACTED]");
+  expect(output).toContain("echo done"); // trailing command survives
+});
+
+test("redact strips an unterminated single-quoted value (no closing quote)", () => {
+  const secret = ["hun", " ", "ter", "2"].join("");
+  const output = redact(`$ password='${secret}`);
+  expect(output).not.toContain(secret);
+  expect(output).not.toContain("ter2"); // tail does not leak to the unquoted branch
+  expect(output).toContain("[REDACTED]");
+});
+
+test("redact strips a double-quoted bearer token after the word Bearer", () => {
+  const jwt = ["eyJ", "abc", ".", "def", ".", "ghi"].join("");
+  const output = redact(`curl -H 'authorization: Bearer "${jwt}"'`);
+  expect(output).not.toContain(jwt);
+  expect(output).toContain("[REDACTED]");
+});
+
+test("redact strips a double-quoted key with an unquoted value", () => {
+  const secret = ["ghp_", "rawvalue", "0123"].join("");
+  const output = redact(`set "token"=${secret}`);
+  expect(output).not.toContain(secret);
+  expect(output).toContain("[REDACTED]");
+});
+
+test("redact strips a dotted provider key (sk-proj-...) as one unit", () => {
+  const key = ["sk-proj-", "aaa", ".", "bbb", ".", "ccc"].join("");
+  const output = redact(`error: invalid api key ${key} rejected`);
+  expect(output).not.toContain(key);
+  expect(output).not.toContain("bbb"); // middle segment does not survive
+  expect(output).not.toContain("ccc"); // trailing segment does not survive
+  expect(output).toContain("[REDACTED]");
+  expect(output).toContain("rejected"); // following word intact
+});
+
+test("redact strips a curl basic-auth password after -u, keeping the username", () => {
+  const pass = ["s3", "cr3", "tpw"].join("");
+  const output = redact(`curl -u admin:${pass} https://api.example.com`);
+  expect(output).not.toContain(pass);
+  expect(output).toContain("admin:[REDACTED]"); // username preserved
+  expect(output).toContain("https://api.example.com"); // URL survives
+});
+
+test("redact leaves a `sort -u file` flag untouched (no colon, not basic auth)", () => {
+  const input = "$ sort -u names.txt && echo ok";
+  expect(redact(input)).toBe(input);
+});
+
+test("redact strips the base64 credential of an HTTP Basic authorization header", () => {
+  const b64 = ["dXNlcjpw", "YXNzd29y", "ZA"].join(""); // base64("user:password")-ish
+  const output = redact(`authorization: Basic ${b64}`);
+  expect(output).not.toContain(b64);
+  expect(output).toContain("[REDACTED]");
+});
+
+test("redact strips a shell-quoted curl -u password, keeping the username", () => {
+  const pass = ["s3", "cr3", "t pw"].join("");
+  const output = redact(`curl -u "admin:${pass}" https://api.example.com`);
+  expect(output).not.toContain(pass);
+  expect(output).not.toContain("t pw"); // the tail after a space cannot leak
+  expect(output).toContain("admin:"); // username survives
+  expect(output).toContain("https://api.example.com"); // URL survives
+});
+
+test("redact strips an attached curl -u password (`-uuser:pass`)", () => {
+  const pass = ["hunter", "2000"].join("");
+  const output = redact(`curl -uadmin:${pass} https://api.example.com`);
+  expect(output).not.toContain(pass);
+  expect(output).toContain("[REDACTED]");
+});
+
+test("redact strips colon-less literal curl/wget user credentials", () => {
+  const curlOutput = redact(`curl --user ${tokenValue} https://api.example.com`);
+  const wgetOutput = redact(`wget -u '${tokenValue}' https://api.example.com`);
+
+  expect(curlOutput).toBe("curl --user [REDACTED] https://api.example.com");
+  expect(wgetOutput).toBe("wget -u '[REDACTED]' https://api.example.com");
+  expect(curlOutput).not.toContain(tokenValue);
+  expect(wgetOutput).not.toContain(tokenValue);
+});
+
+test("redact finds curl after sudo or a prompt but ignores path and mid-word lookalikes", () => {
+  const credential = `admin:${passwordValue}`;
+  expect(redact(`sudo curl -u ${credential} https://api.example.com`)).not.toContain(passwordValue);
+  expect(redact(`# curl -u ${credential} https://api.example.com`)).not.toContain(passwordValue);
+
+  const lookalikes = [
+    "website.com/curl --user alice:staff",
+    "uncurl --user alice:staff",
+  ];
+  for (const input of lookalikes) expect(redact(input)).toBe(input);
+});
+
+test("redact leaves non-curl user/group flags untouched", () => {
+  const inputs = [
+    "$ chown foo-user:group /srv/app",
+    "$ docker run --user 1000:1000 image",
+    "$ tool --user alice:staff",
+  ];
+  for (const input of inputs) expect(redact(input)).toBe(input);
+});
+
 test("redact leaves a transcript with no secrets unchanged", () => {
   const input = "$ rg stockRemaining src\nsrc/demo-product.ts: stockRemaining: 3";
   expect(redact(input)).toBe(input);

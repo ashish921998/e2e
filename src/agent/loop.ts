@@ -188,15 +188,21 @@ function readFinish(input: Record<string, unknown>): LoopResult["agentVerdict"] 
   return { verdict, reason };
 }
 
-function summarizeInput(name: string, input: Record<string, unknown>): string {
+export function summarizeInput(name: string, input: Record<string, unknown>): string {
   const pick = (...keys: string[]) => keys.map((k) => (typeof input[k] === "string" ? `${k}=${String(input[k])}` : null)).filter(Boolean).join(" ");
-  if (name === "goto") return pick("path");
-  if (name === "click" || name === "observe_role") return pick("role", "name");
-  if (name === "fill") return pick("role", "name", "value");
-  if (name === "observe_text") return pick("text");
-  if (name === "bash") return pick("command");
-  if (name === "finish") return pick("verdict");
-  return "";
+  // This string is logged live to the CLI/CI console before the redacted
+  // terminal transcript is persisted. Fill values are always sensitive: their
+  // safety must not depend on looking like a recognized credential format.
+  const summary = (() => {
+    if (name === "goto") return pick("path");
+    if (name === "click" || name === "observe_role") return pick("role", "name");
+    if (name === "fill") return `${pick("role", "name")} value=[REDACTED]`;
+    if (name === "observe_text") return pick("text");
+    if (name === "bash" && typeof input.command === "string") return `command=${redact(input.command)}`;
+    if (name === "finish") return pick("verdict");
+    return "";
+  })();
+  return redact(summary);
 }
 
 function truncate(value: string): string {

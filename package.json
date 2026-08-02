@@ -12,7 +12,10 @@
   },
   "files": [
     "bin",
-    "src",
+    "src/agent",
+    "src/proof",
+    "!src/proof/runtime.ts",
+    "!src/proof/demo-bundle.ts",
     "action.yml",
     "README.md"
   ],
@@ -22,29 +25,31 @@
     "dev:legacy": "vite --host 127.0.0.1 --mode older",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
+    "test:unit": "playwright test --config playwright.unit.config.ts",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:report": "playwright show-report",
     "proof:rehearse": "node scripts/reliability.mjs",
     "proof:export": "node scripts/export-proof.mjs",
     "prove": "node bin/e2e-prove.mjs",
+    "playwright:install": "playwright install chromium",
     "typecheck": "tsc -b"
   },
   "dependencies": {
     "@e2b/desktop": "^2.3.1",
-    "@playwright/test": "latest",
-    "@vitejs/plugin-react": "latest",
+    "@playwright/test": "1.61.1",
     "e2b": "^2.35.0",
-    "playwright-core": "^1.61.1",
-    "react": "latest",
-    "react-dom": "latest",
-    "tsx": "^4.23.1",
-    "vite": "latest"
+    "playwright-core": "1.61.1",
+    "tsx": "^4.23.1"
   },
   "devDependencies": {
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
-    "typescript": "latest"
+    "@vitejs/plugin-react": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "typescript": "latest",
+    "vite": "latest"
   }
 }

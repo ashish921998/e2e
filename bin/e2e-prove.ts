@@ -23,22 +23,15 @@ import { pickClient } from "../src/agent/model";
 import { runAgentLoop } from "../src/agent/loop";
 import { buildAgentVideo } from "../src/agent/video";
 import { deterministicPlanFromSession, normaliseBaseUrl } from "../src/proof/index";
+import { redact } from "../src/proof/redact";
 import { runProof } from "../src/proof/execute";
 import { decideVerdict } from "../src/proof/verdict";
 import type { ProofPlan, ProofStatus, ProofTarget } from "../src/proof/types";
+import { parseArgs, usage } from "./args";
 
-interface ParsedArgs {
-  url?: string;
-  goal?: string;
-  diff?: string;
-  out?: string;
-  targetId?: string;
-  maxSteps?: string;
-  model?: string;
-  provider?: "openai" | "anthropic";
-  noReplay?: boolean;
-  help?: boolean;
-}
+// First output ASAP: the .mjs launcher's cold-start watchdog disarms on the
+// child's first stderr byte. This line is what tells it the tsx loader came up.
+process.stderr.write("[e2e-prove] cli loaded\n");
 
 const args = parseArgs(process.argv.slice(2));
 if (args.help || !args.url) {
@@ -48,12 +41,13 @@ if (args.help || !args.url) {
 
 main().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`[e2e-prove] error: ${message.replace(/sk-[A-Za-z0-9_-]+/g, "[REDACTED]")}\n`);
+  process.stderr.write(`[e2e-prove] error: ${redact(message)}\n`);
   process.exit(2);
 });
 
 async function main(): Promise<void> {
-const baseUrl = normaliseBaseUrl(args.url);
+// The module-level guard above already exited when --url was missing.
+const baseUrl = normaliseBaseUrl(args.url!);
 const outDir = resolve(args.out ?? "./proof-out");
 await mkdir(outDir, { recursive: true });
 
@@ -178,61 +172,4 @@ async function writeSummary(outDir: string, summary: Summary): Promise<void> {
     `${JSON.stringify({ format: "e2e-prove/v1", generatedAt: new Date().toISOString(), ...summary }, null, 2)}\n`,
     "utf8",
   );
-}
-
-function usage(): string {
-  return [
-    "e2e-prove — agentic web proof on E2B",
-    "",
-    "Usage: e2e-prove --url <baseURL> [options]",
-    "",
-    "Options:",
-    "  --url <url>        Base URL of the app to verify (required).",
-    "  --goal <text>      What to verify (default: a generic smoke check).",
-    "  --diff <file>      Path to a unified diff / PR description to ground the agent.",
-    "  --out <dir>        Output directory (default: ./proof-out).",
-    "  --target-id <id>   Target id recorded in the bundle (default: 'preview').",
-    "  --max-steps <n>    Agent step cap (default: 25).",
-    "  --model <id>       Override the model id.",
-    "  --provider <p>     Model provider: openai (default) | anthropic. Also via E2E_PROVE_PROVIDER.",
-    "  --no-replay        Skip the deterministic replay (exploration only; exits non-zero — never a pass gate).",
-    "  -h, --help         Show this help.",
-    "",
-    "Environment: E2B_API_KEY (required) + OPENAI_API_KEY (GPT-5.6, default) | ANTHROPIC_API_KEY (Claude).",
-    "",
-  ].join("\n");
-}
-
-function parseArgs(argv: string[]): ParsedArgs {
-  const out: ParsedArgs = {};
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!;
-    if (arg === "-h" || arg === "--help") {
-      out.help = true;
-      continue;
-    }
-    if (arg.startsWith("--")) {
-      const key = arg.slice(2);
-      const next = argv[i + 1];
-      if (key === "no-replay") {
-        out.noReplay = true;
-        continue;
-      }
-      if (next === undefined || next.startsWith("--")) continue;
-      switch (key) {
-        case "url": out.url = next; break;
-        case "goal": out.goal = next; break;
-        case "diff": out.diff = next; break;
-        case "out": out.out = next; break;
-        case "target-id": out.targetId = next; break;
-        case "max-steps": out.maxSteps = next; break;
-        case "model": out.model = next; break;
-        case "provider":
-          if (next === "openai" || next === "anthropic") out.provider = next;
-          break;
-      }
-      i++;
-    }
-  }
-  return out;
 }

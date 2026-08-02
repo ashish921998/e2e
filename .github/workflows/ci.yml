@@ -1,0 +1,26 @@
+name: ci
+
+# Guards the pluggable surface: the action/CLI must load, typecheck, and pass
+# its unit tests on a clean runner — exactly what a consumer repo gets.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:unit
+      # Launcher smoke: what `npx e2e-prove` does first in a consumer repo —
+      # proves the .mjs → tsx → TS import chain loads cold on a bare runner.
+      - name: CLI smoke (--help)
+        run: node bin/e2e-prove.mjs --help

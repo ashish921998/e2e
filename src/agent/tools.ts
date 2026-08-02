@@ -21,6 +21,29 @@ import type { ProofSandbox } from "./sandbox";
 // Inline type import keeps playwright-core out of the runtime import graph;
 // a top-level `import type { Page }` can still trip tsx's loader.
 type Page = import("playwright-core").Page;
+type AriaRole = Parameters<Page["getByRole"]>[0];
+
+// The model supplies `role` as a free string. Validate it against Playwright's
+// accessible roles at the trust boundary instead of casting the check away with
+// `as never`: an unknown role becomes a clear tool error the agent can correct,
+// not a raw Playwright throw.
+const ARIA_ROLES = new Set<string>([
+  "alert", "alertdialog", "application", "article", "banner", "blockquote", "button",
+  "caption", "cell", "checkbox", "code", "columnheader", "combobox", "complementary",
+  "contentinfo", "definition", "deletion", "dialog", "directory", "document", "emphasis", "feed",
+  "figure", "form", "generic", "grid", "gridcell", "group", "heading", "img",
+  "insertion", "link", "list", "listbox", "listitem", "log", "main", "marquee",
+  "math", "meter", "menu", "menubar", "menuitem", "menuitemcheckbox", "menuitemradio",
+  "navigation", "none", "note", "option", "paragraph", "presentation", "progressbar",
+  "radio", "radiogroup", "region", "row", "rowgroup", "rowheader", "scrollbar",
+  "search", "searchbox", "separator", "slider", "spinbutton", "status", "strong",
+  "subscript", "superscript", "switch", "tab", "table", "tablist", "tabpanel", "term",
+  "textbox", "time", "timer", "toolbar", "tooltip", "tree", "treegrid", "treeitem",
+]);
+
+function toAriaRole(value: string): AriaRole | undefined {
+  return ARIA_ROLES.has(value) ? (value as AriaRole) : undefined;
+}
 
 /** JSON-schema-ish tool descriptors handed to the model clients. */
 export interface ToolDescriptor {
@@ -182,8 +205,10 @@ export async function executeTool(call: ToolCall, opts: ToolExecutorOptions): Pr
       const role = asString(call.input.role);
       const name = asString(call.input.name);
       if (!role || !name) return { result: { ok: false, summary: "click needs role and name", error: "missing args" } };
+      const clickRole = toAriaRole(role);
+      if (!clickRole) return { result: { ok: false, summary: `unknown role '${role}'`, error: "bad role" } };
       const { page } = await sandbox.connectPage();
-      await page.getByRole(role as never, { name, exact: false }).click({ timeout: 10_000 });
+      await page.getByRole(clickRole, { name, exact: false }).click({ timeout: 10_000 });
       const event: RecordedBrowserEvent = { type: "click", at, role, accessibleName: name, label: `click ${role} "${name}"` };
       session.events.push(event);
       await capture(opts, `click-${role}-${name}`);
@@ -194,8 +219,10 @@ export async function executeTool(call: ToolCall, opts: ToolExecutorOptions): Pr
       const name = asString(call.input.name);
       const value = asString(call.input.value) ?? "";
       if (!role || !name) return { result: { ok: false, summary: "fill needs role, name and value", error: "missing args" } };
+      const fillRole = toAriaRole(role);
+      if (!fillRole) return { result: { ok: false, summary: `unknown role '${role}'`, error: "bad role" } };
       const { page } = await sandbox.connectPage();
-      await page.getByRole(role as never, { name, exact: false }).fill(value, { timeout: 10_000 });
+      await page.getByRole(fillRole, { name, exact: false }).fill(value, { timeout: 10_000 });
       const event: RecordedBrowserEvent = { type: "fill", at, role, accessibleName: name, value, label: `fill ${role} "${name}"` };
       session.events.push(event);
       await capture(opts, `fill-${role}-${name}`);
@@ -205,13 +232,17 @@ export async function executeTool(call: ToolCall, opts: ToolExecutorOptions): Pr
       const role = asString(call.input.role);
       const name = asString(call.input.name);
       if (!role || !name) return { result: { ok: false, summary: "observe_role needs role and name", error: "missing args" } };
+      const observeRole = toAriaRole(role);
+      if (!observeRole) return { result: { ok: false, summary: `unknown role '${role}'`, error: "bad role" } };
       const { page } = await sandbox.connectPage();
-      const locator = page.getByRole(role as never, { name, exact: false });
+      const locator = page.getByRole(observeRole, { name, exact: false });
       try {
         await locator.waitFor({ state: "visible", timeout: 10_000 });
       } catch {
         return { result: { ok: false, summary: `${role} "${name}" not visible`, error: "not visible" }, observation: await observe(page) };
       }
+      // role + accessibleName routes this to expectRole in the interpreter; text
+      // mirrors the name only so the event's `text` field is non-empty.
       const event: BrowserObservationEvent = { type: "observe", at, role, accessibleName: name, text: name, label: `expect ${role} "${name}"` };
       session.events.push(event);
       await capture(opts, `observe-${role}-${name}`);
@@ -227,7 +258,9 @@ export async function executeTool(call: ToolCall, opts: ToolExecutorOptions): Pr
       } catch {
         return { result: { ok: false, summary: `text "${text}" not visible`, error: "not visible" }, observation: await observe(page) };
       }
-      const event: BrowserObservationEvent = { type: "observe", at, role: "status", text, label: `expect text "${text}"` };
+      // No accessibleName → the interpreter routes this to expectText. Do not set
+      // a role: it would falsely imply a role assertion the step never makes.
+      const event: BrowserObservationEvent = { type: "observe", at, text, label: `expect text "${text}"` };
       session.events.push(event);
       await capture(opts, `observe-text`);
       return { result: { ok: true, summary: `text "${text}" is visible` }, observation: await observe(page) };
@@ -240,17 +273,19 @@ export async function executeTool(call: ToolCall, opts: ToolExecutorOptions): Pr
       // credential shapes BEFORE it goes anywhere — both the persisted
       // transcript AND the summary fed back to the model. A leaked
       // `Authorization: bearer …` from a curl must never reach the provider.
+      // The command line itself can carry a secret (e.g. `curl -H "Authorization:
+      // Bearer …"`), so redact it too — not just stdout/stderr.
+      const safeCommand = redact(command);
       const safeStdout = redact(stdout);
       const safeStderr = redact(stderr);
-      const line = `$ ${command}\n${safeStdout}${safeStderr ? `\n${safeStderr}` : ""}`;
+      const line = `$ ${safeCommand}\n${safeStdout}${safeStderr ? `\n${safeStderr}` : ""}`;
       terminal.push(line);
       const summary = `exit ${exitCode}, ${truncateForSummary(safeStdout)}${safeStderr ? ` / ${truncateForSummary(safeStderr)}` : ""}`;
       return { result: { ok: exitCode === 0, summary, ...(exitCode === 0 ? {} : { error: `non-zero exit ${exitCode}` }) } };
     }
-    case "finish": {
-      // No side effect; the loop reads the verdict from input.
-      return { result: { ok: true, summary: asString(call.input.reason) ?? "finished" } };
-    }
+    // Note: `finish` is intercepted by the loop before executeTool is called, so
+    // it has no case here — routing it through the executor would break the
+    // loop's early return.
     default:
       return { result: { ok: false, summary: `unknown tool ${call.name}`, error: "unknown tool" } };
   }

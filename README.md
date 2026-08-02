@@ -1,17 +1,27 @@
-# e2e
+# e2e-proof
 
-e2e turns an agent's successful browser verification into a reviewable proof: a constrained, readable Playwright test replayed in a fresh browser, with a verdict and its visual evidence. The Build Week golden path is deliberately narrow: an agent adds the Vintage Camera low-stock warning, then e2e proves it locally and exposes deployment drift against an older target.
+**Agentic end-to-end testing for any web app.** An LLM agent drives a real browser to verify your change, then a deterministic Playwright replay produces the verdict. The replay video lands on the pull request (both videos are attached to the run as artifacts).
 
-## e2e-proof — agentic web testing on E2B (GitHub Action + CLI)
+> An agent's claim is not the proof — the independent replay is.
 
-On top of the local engine, **e2e-proof** gives any web repo an autonomous tester that runs on every PR: it boots an isolated cloud sandbox (E2B — real Chrome + a terminal), an LLM agent (GPT-5.6 by default; Claude Opus 4.8 also supported) drives the browser to verify your change, then the same deterministic engine replays the recorded steps in a fresh browser to produce the verdict. Both the agent-exploration video and the replay video are posted to the PR. **An agent's claim is not the proof — the independent replay is.**
+`e2e-proof` runs on every PR: it boots an isolated cloud sandbox (E2B — real Chrome + a terminal), a frontier model explores the app to confirm the change works, then the **same engine** replays the recorded steps in a fresh browser to issue a pass/fail verdict you can gate on. It is framework-agnostic — anything reachable by URL works (React, Vue, Svelte, static, SSR).
 
-### Install in any repo (one file + two secrets)
+## Why
+
+Most "AI testing" tools stop at the agent saying "it looked fine." That claim is not evidence. `e2e-proof` splits the work in two:
+
+1. **Exploration** — a model uses a constrained tool set (`goto`, `click`, `fill`, `observe_role`, `observe_text`, `bash`, `finish`) to exercise the change. This is creative and non-deterministic.
+2. **Replay** — every browser action the agent took is compiled into a real Playwright spec and re-run in a **fresh** browser context. Only this replay's assertions can produce a `passed` verdict.
+
+The exploration video shows the journey; the replay video is the proof.
+
+## Quick start (GitHub Action)
+
+One workflow file + two secrets. Drop this into `.github/workflows/e2e-proof.yml`:
 
 ```yaml
-# .github/workflows/e2e-proof.yml
 on:
-  deployment_status:          # fires when your preview finishes deploying
+  deployment_status:          # fires when your preview deploy succeeds
 jobs:
   proof:
     if: github.event.deployment_status.state == 'success'
@@ -19,129 +29,98 @@ jobs:
     steps:
       - uses: ashish921998/e2e@v1
         with:
-          goal: "verify the changed feature works"
+          goal: "Verify the changed feature works."
         env:
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}         # GPT-5.6 (default); or ANTHROPIC_API_KEY
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}   # or ANTHROPIC_API_KEY
 ```
 
-Add repo secrets `E2B_API_KEY` + `OPENAI_API_KEY` (GPT-5.6 is the default; `ANTHROPIC_API_KEY` selects Claude Opus 4.8 instead). That's the whole install — no code copied, no engine to wire. The action is self-contained: it installs its own dependencies and the replay's Chromium on the runner. It auto-resolves the PR's preview URL from the `deployment_status` event (works with Vercel, Netlify, Cloudflare Pages, Render, Amplify); pass `base-url` to override, or trigger on `pull_request` with an explicit URL.
+That's the whole install. The action is self-contained — it installs its own dependencies and the replay's Chromium on the runner, so the consuming repo needs no Playwright, no copied code, no wiring. It auto-resolves the PR's preview URL from the `deployment_status` event (works with Vercel, Netlify, Cloudflare Pages, Render, Amplify); pass `base-url` to override, or trigger on `pull_request` with an explicit URL.
 
-### Run locally or in any CI
+**Secrets:** `E2B_API_KEY` (required) plus one model key — `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. When both are present OpenAI is used; override with the `E2E_PROVE_PROVIDER` env var.
+
+## CLI
+
+Run the same pipeline locally or in any CI:
 
 ```sh
 npx e2e-prove --url https://your-preview.app --goal "the cart total updates on add"
 # → proof-out/agent-exploration.mp4, proof-out/replay/bundle.json, exit 0 on pass
 ```
 
-Exit code is the verdict, so CI gates on it. `--diff <file>` grounds the agent on the PR change; `--no-replay` runs exploration only.
+The exit code **is** the verdict, so CI gates on it directly.
 
-### Supported platforms
+| Flag          | Purpose                                                        |
+| ------------- | ------------------------------------------------------------- |
+| `--url`       | Target URL to test (required).                                |
+| `--goal`      | What the agent should verify, in plain language.              |
+| `--diff`      | Path to a unified diff; grounds the agent on the PR change.   |
+| `--max-steps` | Agent step cap (default 25).                                  |
+| `--model`     | Explicit model id for the provider.                           |
+| `--provider`  | `openai` or `anthropic` (overrides key-based detection).      |
+| `--no-replay` | Exploration video + agent verdict only; skips the replay. The verdict gate needs the replay, so such a run never `passed` (exits `2`). |
+| `--out`       | Output directory (default `proof-out/`).                      |
+| `--target-id` | Target id recorded in the bundle (default `preview`).         |
 
-- **CI:** GitHub Actions (`ubuntu-latest`); portable to any CI via the `npx` CLI.
-- **Sandbox/runtime:** E2B cloud Linux VM (Ubuntu) — provides Chrome + terminal + recording for the **agent's** exploration. The **replay** runs its own Playwright + Chromium on the GitHub runner (the Action installs both), which is what produces the verdict.
-- **CLI host:** Node 20+ on macOS / Linux / Windows (WSL).
-- **Target:** any web app reachable by URL (React/Vue/static/SSR — the agent drives real Chrome; framework-agnostic).
-- **Models:** GPT-5.6 (OpenAI, default) or Claude Opus 4.8 (Anthropic) — selected by which key is present when both are set (OpenAI wins), or override with `E2E_PROVE_PROVIDER` / `--provider`.
+The CLI resolves its **own** pinned Playwright install for the replay — your repo never needs Playwright as a dependency. Install its matching browser binary once on the host: `npx --yes playwright@1.61.1 install chromium`.
 
-### How it works (the determinism guarantee)
+## Configuration
 
-1. The agent calls a **constrained tool set** — `goto`, `click(role,name)`, `fill(role,name,value)`, `observe_role/observe_text`, `bash`, `finish` — driven over a CDP URL into the sandboxed Chrome.
-2. Every browser tool **also** appends a `RecordedBrowserEvent` to a `RecordedSession` (the engine's existing shape in `src/proof/types.ts`).
-3. When the agent finishes, `deterministicPlanFromSession` turns the session into a `ProofPlan`, which `renderPlaywrightTest` renders to a real Playwright spec.
-4. `runProof` replays that spec once in a **fresh** browser with `video:"on"`. Only that independent replay's assertions can produce a `passed` verdict.
-5. The agent-exploration video (assembled from per-step screenshots) is the journey; the replay video is the proof.
+Action inputs (see [`action.yml`](action.yml) for the canonical list):
 
-```
+| Input          | Default | Description                                                                 |
+| -------------- | ------- | --------------------------------------------------------------------------- |
+| `goal`         | `Verify the changed feature works against the running app.` | What the agent should verify, in plain language. |
+| `base-url`     | —       | Explicit URL to test; overrides auto-detection.                             |
+| `preview-url`  | —       | Fallback URL when neither `base-url` nor a deployment event is available.   |
+| `max-steps`    | `25`    | Agent step cap.                                                             |
+| `model`        | —       | Optional model id override for the chosen provider.                         |
+| `no-replay`    | `false` | If `true`, skip the deterministic replay.                                   |
+| `comment-on-pr`| `true`  | Post the verdict + video link as a PR comment.                              |
+| `github-token` | `github.token` | Token for posting the PR comment and uploading the video asset.      |
+
+## How it works
+
+```text
 PR → action → startSandbox(E2B) → agent loop (model + tools) → RecordedSession
             → deterministicPlanFromSession → runProof (fresh Playwright, video:on) → verdict + videos → PR comment
 ```
 
-### Why E2B
+1. The agent calls a **constrained tool set** over a CDP connection into the sandboxed Chrome.
+2. Every browser tool **also** appends a `RecordedBrowserEvent` to a `RecordedSession`.
+3. When the agent finishes, `deterministicPlanFromSession` compiles the session into a schema-validated `ProofPlan`.
+4. `renderPlaywrightTest` turns the plan into a real Playwright spec.
+5. `runProof` replays that spec once in a **fresh** browser with `video: "on"`. Only this replay's assertions can return `passed`.
 
-E2B is the "give the agent a computer" layer: an isolated cloud VM with Chrome, a terminal, and a live stream, with nothing to install on the runner. It removes all the sandbox-a-browser-and-terminal-in-CI work. The agent attaches Playwright over the CDP URL E2B exposes, so `getByRole(...)` (robust to CSS/class changes) drives the page — which is what maps 1:1 to a `ProofStep` and keeps the proof deterministic.
+Because the replay uses `getByRole(...)` locators (robust to CSS/class churn) and a constrained action schema, the proof resists incidental UI changes — it fails on genuine behavior changes, not styling noise. Browser, network, timing, or target-availability problems can still surface as failures; the goal is that a red verdict reflects a real behavioral difference rather than a brittle selector.
 
-## Implementation status
+### Why a sandbox
 
-The local golden path is implemented and validated. A user can capture a browser session, run a fresh local replay through the Vite runtime, inspect the generated test and video in the reviewer, rehearse local-pass/older-target-failure behavior, and export a verified rehearsal test. GPT-5.6 interpretation is optional because the runner must remain deterministic when `OPENAI_API_KEY` is unavailable.
+The E2B sandbox is the "give the agent a computer" layer: an isolated cloud VM with Chrome, a terminal, and a live stream, with nothing to install on the runner. The agent attaches Playwright over the CDP URL E2B exposes; the replay then runs its own Playwright + Chromium on the GitHub runner, which is what produces the verdict.
 
-Not yet included: generic Codex/computer-use hooks, automatic terminal recording, hosted runners, cross-platform VM orchestration, accounts, and automatic GitHub commits.
+## Supported platforms
 
-## Setup
+- **CI:** GitHub Actions (`ubuntu-latest`); portable to any CI via the `npx` CLI.
+- **Sandbox:** E2B cloud Linux VM (Ubuntu) — Chrome + terminal + recording for the agent's exploration.
+- **CLI host:** Node 20+ on macOS / Linux / Windows (WSL).
+- **Target:** any web app reachable by URL — framework-agnostic.
+- **Models:** any OpenAI or Anthropic model id, selected by which key is present or via `E2E_PROVE_PROVIDER` / `--provider`.
 
-```sh
-npm install
-npx playwright install chromium
-```
-
-Start the updated app and open the proof reviewer at [http://127.0.0.1:5173/proof](http://127.0.0.1:5173/proof):
-
-```sh
-npm run dev:local
-```
-
-On the shop page, use **Start recording** and **Stop & save** to capture the live product semantics in this browser. Then choose **Create proof** and **Run fresh replay**. Use `?target=production` on the proof page to inspect the controlled older-target failure; for a live production replay, start the older target separately and launch the updated app with `PROOFMODE_PRODUCTION_URL=http://127.0.0.1:4174`.
-
-## How the proof flow works
-
-1. A browser session records only structured actions and observations: paths, accessible roles/names, visible text, timestamps, and optional terminal transcript.
-2. GPT-5.6 may interpret that successful session into a **constrained Proof Plan**. It never returns arbitrary JavaScript; invalid or unavailable model output falls back to deterministic interpretation.
-3. The renderer turns the validated plan into Playwright source.
-4. Playwright replays the source in a fresh browser context against a chosen target.
-5. The Proof Bundle presents the generated test, target, verdict, diff, terminal evidence, trace, screenshots, and browser video. A model narrative is never treated as proof—the independent replay is the verdict.
-
-The reviewer opens a small seeded example when no capture is selected, but its primary path accepts a live session captured in the browser and sends it to the local runner. Terminal transcript is evidence only, never an assertion source.
-
-## Targets and direct E2E commands
-
-`npm run dev:local` serves the current updated product, where the Vintage Camera displays `Only 3 left`.
-
-`npm run dev:legacy` serves a controlled older release, where that warning is deliberately absent. Both targets retain the same product data, selectors, and E2E source.
+## Developing
 
 ```sh
-# Updated target: passes and records video
-npm run test:e2e
-
-# Older target: intentionally fails the exact same test
-npm run dev:legacy -- --port 4174
-E2E_BASE_URL=http://127.0.0.1:4174 npm run test:e2e
+git clone <this-repo>
+npm ci
+npm run playwright:install        # install this package's pinned Chromium for the replay
+npm run typecheck                 # tsc -b across src/, bin/, tests/
+npm run test:unit                 # pure-logic specs — no sandbox, no browser, no keys
+node bin/e2e-prove.mjs --help     # launcher smoke
 ```
 
-Playwright stores video for every run and keeps screenshots and traces for failures in `test-results/`. View the HTML report with `npm run test:e2e:report`.
+The unit suite covers the verdict gate, the session→plan→Playwright-source round-trip, transcript redaction, and CLI argument parsing — everything decidable without a sandbox or model key.
 
-## Reliability rehearsal and test export
+To exercise the full pipeline locally you'll need `E2B_API_KEY` and a model key in your environment; the engine degrades to a deterministic interpreter when no model is available.
 
-The reliability rehearsal starts both controlled targets, runs the same proof against each, and writes all artifacts plus `summary.json` to a timestamped `proof-runs/` folder. It exits non-zero unless the updated target passes with video and the older target fails with video and screenshot.
+## License
 
-```sh
-node scripts/reliability.mjs
-```
-
-After a fully passing rehearsal, export its passing generated test without overwriting existing exports:
-
-```sh
-node scripts/export-proof.mjs <proof-run-id>
-# Optional stable export name
-node scripts/export-proof.mjs <proof-run-id> low-stock.proof.spec.ts
-```
-
-Exports go to `proof-exports/` with a small sidecar that records the source proof run. Do not export failed or incomplete proofs.
-
-## GPT-5.6 Build Week path
-
-The submitted demo runs the autonomous tester with GPT-5.6 by configuring `OPENAI_API_KEY`; never expose this key in the browser or commit it. The separate local capture/reviewer remains offline-rehearsable and can use deterministic interpretation when a model is unavailable, but the Build Week agentic path defaults to GPT-5.6.
-
-## Three-minute demo script
-
-1. Open the small shop and state the task: “Add a warning when fewer than five items remain.”
-2. Show Codex’s terminal/browser development evidence and the resulting `Only 3 left` warning.
-3. Open `/proof`: the reviewer sees the generated Playwright test, implementation diff, and fresh local `PASS` with video.
-4. Switch to `?target=production`. The byte-identical test runs against the older target and fails at the missing low-stock assertion; play the captured failure video.
-5. Close: “An agent’s claim is not proof. e2e independently replays the claim.”
-
-For a rehearsal, run the reliability command before recording and use its timestamped artifacts as backup evidence.
-## Local proof-run API
-
-While `vite` is running, `POST /api/proof-runs` turns a constrained recorded browser session into a fresh Playwright replay. The body is `{ "session": RecordedSession, "targetId": "local", "preferModel": false }`. `targetId` is restricted to `local` and, only when `PROOFMODE_PRODUCTION_URL` is set, `production`; callers cannot choose arbitrary URLs. Set `preferModel` to `true` with `OPENAI_API_KEY` to ask GPT-5.6 for the constrained plan. The runner falls back to the deterministic interpreter if the model is unavailable.
-
-Runs and evidence are written beneath the gitignored `proof-runs/` directory and served read-only at `/proof-runs/<run-id>/...`. The response is a serialized Proof Bundle with the generated test and artifact URLs. Never put secrets in a recorded terminal transcript; the runtime redacts common credential assignments before persisting it.
+MIT — see [LICENSE](LICENSE).
