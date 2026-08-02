@@ -60,6 +60,8 @@ test("redact preserves assignment quote delimiters without reprocessing replacem
 test("redact consumes quotes around Bearer and Basic credentials", () => {
   expect(redact(`authorization=Bearer "${bearerValue}"`)).toBe("authorization=[REDACTED]");
   expect(redact(`authorization=Basic '${bearerValue}'`)).toBe("authorization=[REDACTED]");
+  expect(redact(`authorization=Bearer"${bearerValue}"`)).toBe("authorization=[REDACTED]");
+  expect(redact(`authorization=Basic'${bearerValue}'`)).toBe("authorization=[REDACTED]");
 });
 
 test("redact leaves a benign substring containing 'sk-' alone", () => {

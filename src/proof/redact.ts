@@ -18,11 +18,11 @@ export function redact(value: string): string {
     )
     // Also consume quotes wrapped around only a Bearer/Basic credential.
     .replace(
-      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*)(?:bearer|basic)\s+"(?:\\[\s\S]|[^"\\])*(?:"|$)/gi,
+      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*)(?:bearer|basic)\s*"(?:\\[\s\S]|[^"\\])*(?:"|$)/gi,
       "$1[REDACTED]",
     )
     .replace(
-      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*)(?:bearer|basic)\s+'[^']*(?:'|$)/gi,
+      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*)(?:bearer|basic)\s*'[^']*(?:'|$)/gi,
       "$1[REDACTED]",
     )
     // Unquoted values stop at delimiters so adjacent fields survive. Skip
