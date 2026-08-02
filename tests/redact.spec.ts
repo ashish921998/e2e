@@ -49,7 +49,17 @@ test("redact strips credentials inside quoted JSON, even non-sk tokens", () => {
   const jwt = ["eyJ", "header", ".", "payload", ".", "sig"].join("");
   const output = redact(`response: {"authorization":"Bearer ${jwt}","ok":true}`);
   expect(output).not.toContain(jwt);
-  expect(output).toContain("ok"); // non-secret fields survive
+  expect(output).toBe('response: {"authorization":"[REDACTED]","ok":true}');
+});
+
+test("redact preserves assignment quote delimiters without reprocessing replacements", () => {
+  expect(redact(`authorization="${passwordValue}"`)).toBe('authorization="[REDACTED]"');
+  expect(redact(`authorization='${passwordValue}'`)).toBe("authorization='[REDACTED]'");
+});
+
+test("redact consumes quotes around Bearer and Basic credentials", () => {
+  expect(redact(`authorization=Bearer "${bearerValue}"`)).toBe("authorization=[REDACTED]");
+  expect(redact(`authorization=Basic '${bearerValue}'`)).toBe("authorization=[REDACTED]");
 });
 
 test("redact leaves a benign substring containing 'sk-' alone", () => {
@@ -177,6 +187,28 @@ test("redact strips an attached curl -u password (`-uuser:pass`)", () => {
   const output = redact(`curl -uadmin:${pass} https://api.example.com`);
   expect(output).not.toContain(pass);
   expect(output).toContain("[REDACTED]");
+});
+
+test("redact strips colon-less literal curl/wget user credentials", () => {
+  const curlOutput = redact(`curl --user ${tokenValue} https://api.example.com`);
+  const wgetOutput = redact(`wget -u '${tokenValue}' https://api.example.com`);
+
+  expect(curlOutput).toBe("curl --user [REDACTED] https://api.example.com");
+  expect(wgetOutput).toBe("wget -u '[REDACTED]' https://api.example.com");
+  expect(curlOutput).not.toContain(tokenValue);
+  expect(wgetOutput).not.toContain(tokenValue);
+});
+
+test("redact finds curl after sudo or a prompt but ignores path and mid-word lookalikes", () => {
+  const credential = `admin:${passwordValue}`;
+  expect(redact(`sudo curl -u ${credential} https://api.example.com`)).not.toContain(passwordValue);
+  expect(redact(`# curl -u ${credential} https://api.example.com`)).not.toContain(passwordValue);
+
+  const lookalikes = [
+    "website.com/curl --user alice:staff",
+    "uncurl --user alice:staff",
+  ];
+  for (const input of lookalikes) expect(redact(input)).toBe(input);
 });
 
 test("redact leaves non-curl user/group flags untouched", () => {

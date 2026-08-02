@@ -6,23 +6,29 @@
  */
 export function redact(value: string): string {
   const assignmentsRedacted = value
-    // Consume double-quoted values through the matching quote, including
-    // escaped characters and newlines. With no closing quote, fail closed by
-    // consuming to the end of the transcript rather than leaking later lines.
+    // Preserve the value's quote delimiter while consuming escaped characters
+    // and newlines. Unterminated values fail closed at the end of the input.
     .replace(
-      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*")(?:\\[\s\S]|[^"\\])*(?:"|$)/gi,
-      '$1[REDACTED]"',
+      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*)(")(?:(?:\\[\s\S])|[^"\\])*(?:"|$)/gi,
+      "$1$2[REDACTED]$2",
     )
-    // Shell single quotes can contain newlines but not escaped single quotes.
-    // As above, an unterminated value is redacted through end of input.
     .replace(
-      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*')[^']*(?:'|$)/gi,
-      "$1[REDACTED]'",
+      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*)(')[^']*(?:'|$)/gi,
+      "$1$2[REDACTED]$2",
     )
-    // Unquoted values stop at delimiters so adjacent fields survive. Bearer and
-    // Basic are consumed with their credential instead of being redacted alone.
+    // Also consume quotes wrapped around only a Bearer/Basic credential.
     .replace(
-      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*)(?:(?:bearer|basic)\s+)?["']?[^\s",;&]+/gi,
+      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*)(?:bearer|basic)\s+"(?:\\[\s\S]|[^"\\])*(?:"|$)/gi,
+      "$1[REDACTED]",
+    )
+    .replace(
+      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*)(?:bearer|basic)\s+'[^']*(?:'|$)/gi,
+      "$1[REDACTED]",
+    )
+    // Unquoted values stop at delimiters so adjacent fields survive. Skip
+    // quoted values and replacements produced by the preceding passes.
+    .replace(
+      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*)(?!["']|\[REDACTED\])(?:(?:bearer|basic)\s+)?[^\s"',;&]+/gi,
       "$1[REDACTED]",
     );
 
@@ -32,18 +38,19 @@ export function redact(value: string): string {
     .replace(/(?<![A-Za-z0-9_-])(?:sk-|e2b_)[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*/g, "[REDACTED]");
 }
 
-/** Redact user:password only when it is an auth option on curl/wget. */
+/** Redact curl/wget user credentials, with or without a password separator. */
 function redactCommandBasicAuth(value: string): string {
-  // Start at a shell command boundary so unrelated flags such as
-  // `docker run --user 1000:1000` remain valid evidence. The three credential
-  // branches preserve the username while handling double-quoted, single-quoted,
-  // and unquoted arguments (including attached `-uuser:pass`).
+  // Match a real curl/wget command token, not a path ending in /curl or a word
+  // such as uncurl. This still finds commands after sudo and common prompts.
   return value.replace(
-    /((?:^|\n|[;&|]\s*|\$\s*)(?:\S*\/)?(?:curl|wget)\b[^\n;&|]*?(?:-u|--user)(?:[ =]+|(?=\S)))(?:"([^":\n]+):((?:\\[\s\S]|[^"\\])*)(?:"|$)|'([^':\n]+):([^']*)(?:'|$)|([^\s:"']+):([^\s"';&|]+))/gi,
-    (_match, prefix: string, doubleUser?: string, _doublePassword?: string, singleUser?: string, _singlePassword?: string, plainUser?: string) => {
-      if (doubleUser !== undefined) return `${prefix}"${doubleUser}:[REDACTED]"`;
-      if (singleUser !== undefined) return `${prefix}'${singleUser}:[REDACTED]'`;
-      return `${prefix}${plainUser ?? ""}:[REDACTED]`;
+    /((?<![\w./-])(?:curl|wget)\b[^\n;&|]*?(?<!\S)(?:-u(?:[ =]+|(?=\S))|--user[ =]+))("(?:\\[\s\S]|[^"\\])*(?:"|$)|'[^']*(?:'|$)|[^\s"';&|]+)/gi,
+    (_match, prefix: string, argument: string) => {
+      const quote = argument[0] === '"' || argument[0] === "'" ? argument[0] : "";
+      const hasClosingQuote = quote !== "" && argument.length > 1 && argument.endsWith(quote);
+      const credential = quote ? argument.slice(1, hasClosingQuote ? -1 : undefined) : argument;
+      const colon = credential.indexOf(":");
+      const replacement = colon >= 0 ? `${credential.slice(0, colon)}:[REDACTED]` : "[REDACTED]";
+      return `${prefix}${quote}${replacement}${quote}`;
     },
   );
 }
