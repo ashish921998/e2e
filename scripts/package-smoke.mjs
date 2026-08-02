@@ -1,9 +1,10 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
-const root = resolve(import.meta.dirname, "..");
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const tempDir = await mkdtemp(join(tmpdir(), "e2e-prove-package-"));
 
 try {
@@ -23,9 +24,13 @@ try {
 
   const consumerDir = join(tempDir, "consumer");
   await mkdir(consumerDir);
-  await writeFile(join(consumerDir, "package.json"), '{"name":"consumer","private":true}\n', "utf8");
+  await writeFile(
+    join(consumerDir, "package.json"),
+    '{"name":"consumer","private":true,"scripts":{"smoke":"e2e-prove --help"}}\n',
+    "utf8",
+  );
   run("npm", ["install", "--ignore-scripts", "--omit=dev", join(tempDir, manifest.filename)], consumerDir);
-  const help = run(process.execPath, [join(consumerDir, "node_modules/e2e-prove/bin/e2e-prove.mjs"), "--help"], consumerDir);
+  const help = run("npm", ["run", "smoke"], consumerDir);
   if (!help.stdout.includes("--no-replay")) throw new Error("packed CLI help did not load");
 
   process.stdout.write(`package smoke passed (${manifest.files.length} files)\n`);
