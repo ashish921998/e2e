@@ -20,6 +20,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run test:unit
+      - run: npm run test:package
       # Launcher smoke: what `npx e2e-prove` does first in a consumer repo —
       # proves the .mjs → tsx → TS import chain loads cold on a bare runner.
       - name: CLI smoke (--help)
