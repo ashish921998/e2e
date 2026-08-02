@@ -1,72 +1,49 @@
 /**
- * Redact common credential assignments from a terminal transcript before it
- * is persisted as evidence. The transcript is never an assertion source, but
- * it still must not leak secrets to disk.
- *
- * The replacement uses a real capture group so the secret value is actually
- * stripped. (A previous implementation evaluated the replacement against the
- * literal string "$&" and returned the input unchanged.)
- *
- * Two shapes are covered:
- *   1. Key/value assignments — `api-key: …`, `token=…`, and the quoted JSON
- *      form `{"authorization":"Bearer …"}` (the closing/opening quotes around
- *      the key and value are optional in the pattern).
- *   2. Bare provider/runner keys — `sk-…` (model providers) and `e2b_…` (the
- *      sandbox runner's required credential) that appear with no surrounding
- *      key name, e.g. echoed raw in a curl or an error body. A token boundary
- *      is required before the prefix so a benign substring like `ask-me` is not
- *      mistaken for a key.
+ * Remove credentials from terminal output, model feedback, and live logs.
  *
  * This is the single definition of "secret" for the whole engine; call it
  * everywhere evidence or error text may reach disk or a model provider.
  */
 export function redact(value: string): string {
-  return value
-    // Quoted value: consume the whole string up to the real closing quote,
-    // including spaces and escaped quotes (`\"`), so `{"token":"a\"b c"}` is
-    // fully redacted and an adjacent field stays intact. The close is `(?:"|$)`
-    // so a malformed/truncated `token="secret` (no closing quote) still redacts,
-    // terminating at end of line (`m` flag) instead of leaking the value. The
-    // value class excludes newlines so an unterminated value stops at the line.
+  const assignmentsRedacted = value
+    // Consume double-quoted values through the matching quote, including
+    // escaped characters and newlines. With no closing quote, fail closed by
+    // consuming to the end of the transcript rather than leaking later lines.
     .replace(
-      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*")(?:\\.|[^"\\\n])*(?:"|$)/gim,
+      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*")(?:\\[\s\S]|[^"\\])*(?:"|$)/gi,
       '$1[REDACTED]"',
     )
-    // Single-quoted value: shell `password='hun ter2'` — no escape processing
-    // inside single quotes, so consume everything (spaces included) up to the
-    // closing `'` OR end of line (`m` flag), so a malformed/unterminated
-    // `password='hun ter2` still redacts the whole value instead of leaving the
-    // tail for the unquoted branch to expose word-by-word.
+    // Shell single quotes can contain newlines but not escaped single quotes.
+    // As above, an unterminated value is redacted through end of input.
     .replace(
-      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*')[^'\n]*(?:'|$)/gim,
+      /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*')[^']*(?:'|$)/gi,
       "$1[REDACTED]'",
     )
-    // Unquoted value: stop at the first delimiter (incl. `&`) so a following
-    // field — e.g. a query-string `&status=ok` — survives. A lone opening quote
-    // after the scheme (`Bearer "token"`) is consumed so the token can't hide
-    // behind it. `basic` is matched alongside `bearer` so the base64 credential
-    // of `authorization: Basic <b64>` is consumed, not left behind the scheme.
-    // The key quotes are optional too (`"password"=secret` — a double-quoted key
-    // with an unquoted value must still redact).
+    // Unquoted values stop at delimiters so adjacent fields survive. Bearer and
+    // Basic are consumed with their credential instead of being redacted alone.
     .replace(
       /("?(?:api[_-]?key|authorization|token|password)"?\s*[:=]\s*)(?:(?:bearer|basic)\s+)?["']?[^\s",;&]+/gi,
       "$1[REDACTED]",
-    )
-    // curl/wget HTTP basic auth: `-u user:pass` / `--user user:pass`, including
-    // the attached (`-uuser:pass`) and shell-quoted (`-u "user:pass"`) forms.
-    // Keep the username, redact the password after the colon. A word boundary
-    // (`(?<=^|\s)`) is required before the flag so `chown foo-user:group` and
-    // `sort -u file` are untouched; the colon is mandatory so a bare `-u` flag
-    // never matches.
-    .replace(
-      /(?<=^|\s)((?:-u|--user)(?:[ =]+|(?=\S))["']?[^\s:"']+:)[^\s"']+/g,
-      "$1[REDACTED]",
-    )
-    // Bare provider/runner keys. The boundary excludes `-`/`_` too, so a
-    // compound identifier like `feat-sk-release` or `task-e2b_smoke` is not a
-    // false positive; only a standalone key (after whitespace/quote/start) matches.
-    // Dots are spanned only between key chars so a full OpenAI key
-    // (`sk-proj-<id>.<id>.<id>`) is stripped as one unit, without eating a
-    // trailing sentence period.
+    );
+
+  return redactCommandBasicAuth(assignmentsRedacted)
+    // Bare provider/runner keys. The boundary prevents benign compound
+    // identifiers such as feat-sk-release from being mangled.
     .replace(/(?<![A-Za-z0-9_-])(?:sk-|e2b_)[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*/g, "[REDACTED]");
+}
+
+/** Redact user:password only when it is an auth option on curl/wget. */
+function redactCommandBasicAuth(value: string): string {
+  // Start at a shell command boundary so unrelated flags such as
+  // `docker run --user 1000:1000` remain valid evidence. The three credential
+  // branches preserve the username while handling double-quoted, single-quoted,
+  // and unquoted arguments (including attached `-uuser:pass`).
+  return value.replace(
+    /((?:^|\n|[;&|]\s*|\$\s*)(?:\S*\/)?(?:curl|wget)\b[^\n;&|]*?(?:-u|--user)(?:[ =]+|(?=\S)))(?:"([^":\n]+):((?:\\[\s\S]|[^"\\])*)(?:"|$)|'([^':\n]+):([^']*)(?:'|$)|([^\s:"']+):([^\s"';&|]+))/gi,
+    (_match, prefix: string, doubleUser?: string, _doublePassword?: string, singleUser?: string, _singlePassword?: string, plainUser?: string) => {
+      if (doubleUser !== undefined) return `${prefix}"${doubleUser}:[REDACTED]"`;
+      if (singleUser !== undefined) return `${prefix}'${singleUser}:[REDACTED]'`;
+      return `${prefix}${plainUser ?? ""}:[REDACTED]`;
+    },
+  );
 }

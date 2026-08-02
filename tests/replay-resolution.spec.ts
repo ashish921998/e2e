@@ -1,9 +1,9 @@
 import { expect, test } from "@playwright/test";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { lstat, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { linkPackageModules, packageNodeModules } from "../src/proof/execute";
+import { cleanupPackageModulesLink, linkPackageModules, packageNodeModules } from "../src/proof/execute";
 
 // The consumer-repo replay resolves @playwright/test from a generated config +
 // spec that live in a tool-owned run dir with no node_modules. Those files
@@ -40,9 +40,31 @@ test("linkPackageModules lets the run dir resolve @playwright/test as ESM", asyn
     // Production logic: link the package modules into the run dir, then the
     // same ESM import resolves. linkPackageModules is the real code executePlaywright runs.
     const linked = await linkPackageModules(runDir);
-    expect(linked).toBe(nodeModules);
+    expect(linked.nodeModules).toBe(nodeModules);
+    expect(linked.createdLinkPath).toBe(join(runDir, "node_modules"));
     const withSymlink = esmImportExitCode(runDir, { ...process.env, NODE_PATH: "" });
     expect(withSymlink).toBe(0);
+
+    await cleanupPackageModulesLink(linked);
+    await expect(lstat(join(runDir, "node_modules"))).rejects.toThrow();
+  } finally {
+    await rm(runDir, { recursive: true, force: true });
+  }
+});
+
+test("cleanup preserves a node_modules symlink owned by the caller", async () => {
+  const runDir = await mkdtemp(join(tmpdir(), "proof-run-existing-"));
+  try {
+    const nodeModules = packageNodeModules();
+    expect(nodeModules).toBeTruthy();
+    const existingLink = join(runDir, "node_modules");
+    await symlink(nodeModules!, existingLink, "junction");
+
+    const linked = await linkPackageModules(runDir);
+    expect(linked.createdLinkPath).toBeUndefined();
+    await cleanupPackageModulesLink(linked);
+
+    expect((await lstat(existingLink)).isSymbolicLink()).toBe(true);
   } finally {
     await rm(runDir, { recursive: true, force: true });
   }

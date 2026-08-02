@@ -173,4 +173,3 @@ async function writeSummary(outDir: string, summary: Summary): Promise<void> {
     "utf8",
   );
 }
-

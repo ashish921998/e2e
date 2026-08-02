@@ -7,7 +7,7 @@
  * `e2e-prove` CLI / agent use it to produce the deterministic replay that is
  * the actual verdict.
  */
-import { mkdir, writeFile, readdir, lstat, unlink, symlink } from "node:fs/promises";
+import { mkdir, writeFile, readdir, unlink, symlink } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { delimiter, dirname, join, relative } from "node:path";
 import { spawnCollect } from "./spawn";
@@ -52,30 +52,22 @@ export async function runProof(input: RunProofInput): Promise<RunProofResult> {
   const testSource = renderPlaywrightTest(input.plan);
   await writeFile(testPath, testSource, "utf8");
 
-  const outcome = await executePlaywright({
-    runDir: input.runDir,
-    artifactsDir,
-    target: input.target,
-    plan: input.plan,
-    cwd: input.cwd,
-    env: input.env,
-  });
-  // Drop the resolution symlink now Playwright has exited: it must not be
-  // walked by collectArtifacts (which would recurse the whole dependency tree)
-  // nor reachable through the Vite artifact server, which serves any path under
-  // the run dir and would otherwise traverse the link out of it.
-  //
-  // Remove it ONLY if it is actually a symlink — the one linkPackageModules
-  // created. If a REAL node_modules already occupied that path (linkPackageModules
-  // no-op'd on EEXIST), lstat reports a directory and we leave it untouched
-  // rather than deleting the consumer's dependency tree. A failed unlink is
-  // surfaced to stderr instead of silently leaving the link to be walked.
-  const linkPath = join(input.runDir, "node_modules");
-  const linkStat = await lstat(linkPath).catch(() => null);
-  if (linkStat?.isSymbolicLink()) {
-    await unlink(linkPath).catch((error) => {
-      process.stderr.write(`[proof] warning: could not remove resolution symlink ${linkPath}: ${String(error)}\n`);
+  const packageModulesLink = await linkPackageModules(input.runDir);
+  let outcome: RunnerOutcome;
+  try {
+    outcome = await executePlaywright({
+      runDir: input.runDir,
+      artifactsDir,
+      target: input.target,
+      plan: input.plan,
+      cwd: input.cwd,
+      env: input.env,
+      nodeModules: packageModulesLink.nodeModules,
     });
+  } finally {
+    // Only remove a link this invocation created. A reused run directory may
+    // already own a node_modules symlink, and that must survive the replay.
+    await cleanupPackageModulesLink(packageModulesLink);
   }
   const artifacts = await collectArtifacts(input.runDir);
   const bundle = createProofBundle({
@@ -96,6 +88,7 @@ interface ExecuteInput {
   plan: ProofPlan;
   cwd?: string;
   env?: Record<string, string>;
+  nodeModules?: string;
 }
 
 async function executePlaywright(input: ExecuteInput): Promise<RunnerOutcome> {
@@ -107,18 +100,19 @@ async function executePlaywright(input: ExecuteInput): Promise<RunnerOutcome> {
     "utf8",
   );
   const playwright = playwrightCommand();
-  if (!playwright.nodeModules) {
-    // The packaged Playwright CLI was unresolvable; we fell back to `npx`, which
-    // means no symlink/NODE_PATH resolution and possibly a different version.
-    process.stderr.write("[proof] warning: packaged Playwright not resolvable; falling back to `npx playwright` (replay may use a different version).\n");
+  if (!playwright) {
+    const completedAt = new Date().toISOString();
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: "Packaged @playwright/test could not be resolved; reinstall e2e-prove before replaying.\n",
+      startedAt,
+      completedAt,
+      phase: "runner",
+    };
   }
-  // The generated config + spec live in the run dir (a tool-owned dir under the
-  // consumer's cwd, with no node_modules) yet import "@playwright/test". Point
-  // their resolution back at OUR install two ways, since Playwright may load
-  // them as either ESM (symlink) or CJS (NODE_PATH). See linkPackageModules.
-  const nodeModules = await linkPackageModules(input.runDir);
   // A caller-supplied NODE_PATH (input.env) is appended, not allowed to replace ours.
-  const nodePath = [nodeModules, process.env.NODE_PATH, input.env?.NODE_PATH]
+  const nodePath = [input.nodeModules, process.env.NODE_PATH, input.env?.NODE_PATH]
     .filter(Boolean)
     .join(delimiter);
   // Computed values are authoritative: spread caller env first so E2E_BASE_URL
@@ -158,41 +152,55 @@ function findFailedStepIndex(stderr: string, stepCount: number): number | undefi
   return index >= 0 && index < stepCount ? index : undefined;
 }
 
-/**
- * Resolve THIS package's Playwright CLI so the replay works from any cwd —
- * `npx playwright` in a consumer repo that doesn't depend on Playwright would
- * download an arbitrary version (or fail). Falls back to npx only if the
- * package's own install is somehow unresolvable.
- */
-function playwrightCommand(): { command: string; args: string[]; nodeModules?: string } {
+/** Resolve THIS package's pinned Playwright CLI so replay never downloads an arbitrary version. */
+function playwrightCommand(): { command: string; args: string[]; nodeModules: string } | undefined {
   try {
     const cli = createRequire(import.meta.url).resolve("@playwright/test/cli");
     // .../node_modules/@playwright/test/cli.js → .../node_modules
     return { command: process.execPath, args: [cli], nodeModules: dirname(dirname(dirname(cli))) };
   } catch {
-    return { command: process.platform === "win32" ? "npx.cmd" : "npx", args: ["playwright"] };
+    return undefined;
   }
 }
 
 /** Resolve THIS package's node_modules dir (where @playwright/test lives), or undefined. */
 export function packageNodeModules(): string | undefined {
-  return playwrightCommand().nodeModules;
+  return playwrightCommand()?.nodeModules;
+}
+
+export interface PackageModulesLink {
+  nodeModules?: string;
+  /** Set only when this invocation created the link and therefore owns cleanup. */
+  createdLinkPath?: string;
 }
 
 /**
- * Link this package's node_modules into the run dir so the generated ESM
- * config/spec can resolve "@playwright/test" — Node ignores NODE_PATH for ESM
- * `import`, so a symlink it walks up from the run dir is the mechanism that
- * works. Returns the linked path so the caller can also mirror it onto
- * NODE_PATH for the CJS load path. Best-effort: a pre-existing node_modules or
- * an unsupported symlink is swallowed.
+ * Link this package's node_modules into the run dir so generated ESM imports can
+ * resolve "@playwright/test". Failures are visible at their source instead of
+ * surfacing later as a cryptic module-resolution error.
  */
-export async function linkPackageModules(runDir: string): Promise<string | undefined> {
+export async function linkPackageModules(runDir: string): Promise<PackageModulesLink> {
   const nodeModules = packageNodeModules();
-  if (nodeModules) {
-    await symlink(nodeModules, join(runDir, "node_modules"), "junction").catch(() => {});
+  if (!nodeModules) return {};
+
+  const linkPath = join(runDir, "node_modules");
+  try {
+    await symlink(nodeModules, linkPath, "junction");
+    return { nodeModules, createdLinkPath: linkPath };
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? String(error.code) : undefined;
+    if (code !== "EEXIST") {
+      process.stderr.write(`[proof] warning: could not create resolution symlink ${linkPath}: ${String(error)}\n`);
+    }
+    return { nodeModules };
   }
-  return nodeModules;
+}
+
+export async function cleanupPackageModulesLink(link: PackageModulesLink): Promise<void> {
+  if (!link.createdLinkPath) return;
+  await unlink(link.createdLinkPath).catch((error) => {
+    process.stderr.write(`[proof] warning: could not remove resolution symlink ${link.createdLinkPath}: ${String(error)}\n`);
+  });
 }
 
 /** A missing browser binary or a Playwright install failure is a runner problem, not a product failure. */
@@ -235,7 +243,11 @@ export function artifactKind(rel: string): ProofArtifact["kind"] | undefined {
 async function filesBelow(path: string): Promise<string[]> {
   const children = await readdir(path, { withFileTypes: true });
   const nested = await Promise.all(
-    children.map(async (entry) => (entry.isDirectory() ? filesBelow(join(path, entry.name)) : [join(path, entry.name)])),
+    children.map(async (entry) => {
+      // A caller-owned dependency tree is never proof output and can be huge.
+      if (entry.name === "node_modules") return [];
+      return entry.isDirectory() ? filesBelow(join(path, entry.name)) : [join(path, entry.name)];
+    }),
   );
   return nested.flat();
 }

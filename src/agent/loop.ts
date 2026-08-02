@@ -188,18 +188,17 @@ function readFinish(input: Record<string, unknown>): LoopResult["agentVerdict"] 
   return { verdict, reason };
 }
 
-function summarizeInput(name: string, input: Record<string, unknown>): string {
+export function summarizeInput(name: string, input: Record<string, unknown>): string {
   const pick = (...keys: string[]) => keys.map((k) => (typeof input[k] === "string" ? `${k}=${String(input[k])}` : null)).filter(Boolean).join(" ");
-  // This string is logged live to the CLI/CI console (loop.ts:92), which is
-  // reached BEFORE the redacted terminal transcript is persisted. Scrub it
-  // through the single redactor so a `bash` command line or a `fill` value
-  // carrying a credential is not exposed in the log stream.
+  // This string is logged live to the CLI/CI console before the redacted
+  // terminal transcript is persisted. Fill values are always sensitive: their
+  // safety must not depend on looking like a recognized credential format.
   const summary = (() => {
     if (name === "goto") return pick("path");
     if (name === "click" || name === "observe_role") return pick("role", "name");
-    if (name === "fill") return pick("role", "name", "value");
+    if (name === "fill") return `${pick("role", "name")} value=[REDACTED]`;
     if (name === "observe_text") return pick("text");
-    if (name === "bash") return pick("command");
+    if (name === "bash" && typeof input.command === "string") return `command=${redact(input.command)}`;
     if (name === "finish") return pick("verdict");
     return "";
   })();

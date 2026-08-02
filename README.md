@@ -62,7 +62,7 @@ The exit code **is** the verdict, so CI gates on it directly.
 | `--out`       | Output directory (default `proof-out/`).                      |
 | `--target-id` | Target id recorded in the bundle (default `preview`).         |
 
-The CLI resolves its **own** Playwright install for the replay — your repo never needs Playwright as a dependency. Install the browser binary once on the host: `npx playwright install chromium`.
+The CLI resolves its **own** pinned Playwright install for the replay — your repo never needs Playwright as a dependency. Install its matching browser binary once on the host: `npx --yes playwright@1.61.1 install chromium`.
 
 ## Configuration
 

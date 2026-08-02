@@ -91,6 +91,17 @@ test("redact strips a malformed/unterminated quoted credential (no closing quote
   expect(output).toContain("[REDACTED]");
 });
 
+test("redact strips multiline quoted credentials through the closing quote", () => {
+  const secretTail = ["second", "-line", "-secret"].join("");
+  const doubleQuoted = redact(`password="first line\n${secretTail}"\nstatus=ok`);
+  const singleQuoted = redact(`token='first line\n${secretTail}'\nstatus=ok`);
+
+  expect(doubleQuoted).not.toContain(secretTail);
+  expect(singleQuoted).not.toContain(secretTail);
+  expect(doubleQuoted).toContain("status=ok");
+  expect(singleQuoted).toContain("status=ok");
+});
+
 test("redact strips a single-quoted shell value with spaces (no word-boundary leak)", () => {
   const secret = ["hun", " ", "ter", " ", "2"].join("");
   const output = redact(`$ password='${secret}' && echo done`);
@@ -153,9 +164,10 @@ test("redact strips the base64 credential of an HTTP Basic authorization header"
 });
 
 test("redact strips a shell-quoted curl -u password, keeping the username", () => {
-  const pass = ["s3", "cr3", "tpw"].join("");
+  const pass = ["s3", "cr3", "t pw"].join("");
   const output = redact(`curl -u "admin:${pass}" https://api.example.com`);
   expect(output).not.toContain(pass);
+  expect(output).not.toContain("t pw"); // the tail after a space cannot leak
   expect(output).toContain("admin:"); // username survives
   expect(output).toContain("https://api.example.com"); // URL survives
 });
@@ -167,9 +179,13 @@ test("redact strips an attached curl -u password (`-uuser:pass`)", () => {
   expect(output).toContain("[REDACTED]");
 });
 
-test("redact leaves a mid-word `-u` (e.g. `chown foo-user:group`) untouched", () => {
-  const input = "$ chown foo-user:group /srv/app";
-  expect(redact(input)).toBe(input);
+test("redact leaves non-curl user/group flags untouched", () => {
+  const inputs = [
+    "$ chown foo-user:group /srv/app",
+    "$ docker run --user 1000:1000 image",
+    "$ tool --user alice:staff",
+  ];
+  for (const input of inputs) expect(redact(input)).toBe(input);
 });
 
 test("redact leaves a transcript with no secrets unchanged", () => {
