@@ -5,7 +5,7 @@
   "license": "MIT",
   "type": "module",
   "engines": {
-    "node": ">=20.18.1"
+    "node": ">=20.18.1 <21 || >=22"
   },
   "bin": {
     "e2e-prove": "bin/e2e-prove.mjs"

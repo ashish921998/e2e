@@ -102,7 +102,7 @@ The E2B sandbox is the "give the agent a computer" layer: an isolated cloud VM w
 
 - **CI:** GitHub Actions (`ubuntu-latest`); portable to any CI via the `npx` CLI.
 - **Sandbox:** E2B cloud Linux VM (Ubuntu) — Chrome + terminal + recording for the agent's exploration.
-- **CLI host:** Node 20.18.1+ on macOS / Linux / Windows (WSL).
+- **CLI host:** Node 20.18.1–20.x or Node 22+ on macOS / Linux / Windows (WSL).
 - **Target:** any web app reachable by URL — framework-agnostic.
 - **Models:** any OpenAI or Anthropic model id, selected by which key is present or via `E2E_PROVE_PROVIDER` / `--provider`.
 
