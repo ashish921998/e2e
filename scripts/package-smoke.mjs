@@ -39,13 +39,15 @@ try {
 }
 
 function parseTrailingJsonArray(output) {
-  for (let index = output.lastIndexOf("["); index >= 0; index = output.lastIndexOf("[", index - 1)) {
+  let index = output.lastIndexOf("[");
+  while (index >= 0) {
     try {
       const parsed = JSON.parse(output.slice(index));
       if (Array.isArray(parsed)) return parsed;
     } catch {
       // Lifecycle output may precede npm's final JSON payload.
     }
+    index = index === 0 ? -1 : output.lastIndexOf("[", index - 1);
   }
   throw new Error(`npm pack did not emit valid JSON:\n${output}`);
 }
